@@ -1,0 +1,7 @@
+claude-agent-sdk>=0.2
+kokoro>=0.9
+soundfile
+numpy
+piper-tts
+faster-whisper
+playwright
