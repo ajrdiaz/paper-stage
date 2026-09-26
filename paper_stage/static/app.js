@@ -1,0 +1,746 @@
+"use strict";
+
+/* =====================================================================
+   Teatrito de Papel — interfaz web (sin dependencias ni compilación)
+   ===================================================================== */
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const view = $("#view");
+
+const STATUS = {
+  queued: "En cola", running: "Produciendo", done: "Listo",
+  failed: "Falló", cancelled: "Cancelado", interrupted: "Interrumpido",
+};
+const ACTIVE = new Set(["queued", "running"]);
+const LANG = { es: "Español", en: "English" };
+const PREFS_KEY = "paper-stage:prefs";
+
+let CONFIG = null;
+let cleanup = [];          // funciones a ejecutar al cambiar de vista
+const watched = new Map(); // job id → estado conocido (para avisos al terminar)
+
+/* ------------------------------------------------------------------ utilidades */
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function api(path, options = {}) {
+  const init = { headers: {}, ...options };
+  if (init.body && typeof init.body !== "string") {
+    init.body = JSON.stringify(init.body);
+    init.headers["Content-Type"] = "application/json";
+  }
+  const res = await fetch(path, init);
+  const data = res.headers.get("content-type")?.includes("json") ? await res.json() : null;
+  if (!res.ok) throw new Error(data?.error || `Error ${res.status}`);
+  return data;
+}
+
+function fmtTime(seconds) {
+  if (seconds == null || isNaN(seconds)) return "—";
+  const s = Math.max(0, Math.round(seconds));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return h ? `${h} h ${String(m).padStart(2, "0")} min` : m ? `${m} min ${String(r).padStart(2, "0")} s` : `${r} s`;
+}
+const fmtClock = t => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`;
+const fmtCost = usd => (usd ? `$${usd.toFixed(2)}` : "$0.00");
+const fmtDate = ts => new Date(ts * 1000).toLocaleString("es", { dateStyle: "medium", timeStyle: "short" });
+const fmtSize = b => (b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`);
+
+function pill(status) {
+  return `<span class="pill ${esc(status)}">${esc(STATUS[status] || status)}</span>`;
+}
+
+function toast(html, kind = "") {
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  el.innerHTML = html;
+  $("#toasts").append(el);
+  setTimeout(() => el.remove(), 6000);
+}
+
+function modal(title, html) {
+  $("#modal-title").textContent = title;
+  $("#modal-body").innerHTML = html;
+  $("#modal").showModal();
+}
+
+function confirmAction(message) {
+  return window.confirm(message);
+}
+
+function loadPrefs() {
+  try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch { return {}; }
+}
+function savePrefs(prefs) {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* sin almacenamiento */ }
+}
+
+function onCleanup(fn) { cleanup.push(fn); }
+
+function poll(fn, ms) {
+  let stopped = false, timer = null;
+  const tick = async () => {
+    if (stopped) return;
+    try { await fn(); } catch (err) { console.warn(err); }
+    if (!stopped) timer = setTimeout(tick, ms);
+  };
+  tick();
+  onCleanup(() => { stopped = true; clearTimeout(timer); });
+}
+
+/* ------------------------------------------------------------------ markdown mínimo */
+
+function inlineMd(text) {
+  return esc(text)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+}
+
+function markdown(src) {
+  const lines = String(src || "").replace(/\r/g, "").split("\n");
+  const out = [];
+  let i = 0, para = [];
+  const flush = () => { if (para.length) { out.push(`<p>${inlineMd(para.join(" "))}</p>`); para = []; } };
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^```/.test(line)) {
+      flush();
+      const code = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) code.push(lines[i++]);
+      out.push(`<pre><code>${esc(code.join("\n"))}</code></pre>`);
+      i++;
+      continue;
+    }
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { flush(); const n = Math.min(3, h[1].length); out.push(`<h${n}>${inlineMd(h[2])}</h${n}>`); i++; continue; }
+    if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || "")) {
+      flush();
+      const cells = l => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      const head = cells(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(cells(lines[i++]));
+      out.push(`<table><thead><tr>${head.map(c => `<th>${inlineMd(c)}</th>`).join("")}</tr></thead><tbody>${
+        rows.map(r => `<tr>${r.map(c => `<td>${inlineMd(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
+      continue;
+    }
+    const li = line.match(/^\s*([-*]|\d+[.)])\s+(.*)$/);
+    if (li) {
+      flush();
+      const ordered = /\d/.test(li[1]);
+      const items = [];
+      while (i < lines.length) {
+        const m = lines[i].match(/^\s*([-*]|\d+[.)])\s+(.*)$/);
+        if (m) { items.push(m[2]); i++; }
+        else if (/^\s{2,}\S/.test(lines[i]) && items.length) { items[items.length - 1] += " " + lines[i].trim(); i++; }
+        else break;
+      }
+      const tag = ordered ? "ol" : "ul";
+      out.push(`<${tag}>${items.map(it => {
+        const task = it.match(/^\[([ xX✓])\]\s*(.*)$/);
+        return task
+          ? `<li class="task"><input type="checkbox" disabled ${task[1] !== " " ? "checked" : ""}>${inlineMd(task[2])}</li>`
+          : `<li>${inlineMd(it)}</li>`;
+      }).join("")}</${tag}>`);
+      continue;
+    }
+    if (/^>\s?/.test(line)) { flush(); out.push(`<p class="muted">${inlineMd(line.replace(/^>\s?/, ""))}</p>`); i++; continue; }
+    if (!line.trim()) { flush(); i++; continue; }
+    para.push(line.trim());
+    i++;
+  }
+  flush();
+  return `<div class="md">${out.join("")}</div>`;
+}
+
+/* ------------------------------------------------------------------ avisos globales */
+
+async function refreshBanner() {
+  const parts = [];
+  if (CONFIG?.demo) {
+    parts.push(`<div class="banner"><div><strong>Modo demostración.</strong> No se llama a Claude ni se gasta crédito; los videos son de ejemplo para probar la interfaz.</div></div>`);
+  } else {
+    try {
+      const health = await api("/api/health");
+      if (!health.ok) {
+        parts.push(`<div class="banner warn"><div><strong>Faltan dependencias locales.</strong> El agente no podrá terminar el video. <a href="#/sistema">Ver detalles</a></div></div>`);
+      }
+    } catch { /* sin datos de salud */ }
+  }
+  $("#banner").innerHTML = parts.join("");
+}
+
+function notifyFinished(job) {
+  const title = esc(job.request?.tema || job.slug);
+  if (job.status === "done") {
+    toast(`🎬 <strong>${title}</strong> está listo. <a href="#/video/${esc(job.slug)}">Ver video</a>`, "ok");
+  } else {
+    toast(`<strong>${title}</strong>: ${esc(STATUS[job.status])}. <a href="#/trabajo/${esc(job.id)}">Ver detalles</a>`, "err");
+  }
+  if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+    new Notification("Teatrito de Papel", {
+      body: `${job.request?.tema || job.slug}: ${STATUS[job.status]}`,
+    });
+  }
+}
+
+// Vigila en segundo plano los trabajos activos para avisar cuando terminen, en cualquier vista.
+async function watchJobs() {
+  try {
+    const jobs = await api("/api/jobs");
+    for (const job of jobs) {
+      const before = watched.get(job.id);
+      if (before && ACTIVE.has(before) && !ACTIVE.has(job.status)) notifyFinished(job);
+      watched.set(job.id, job.status);
+    }
+  } catch { /* reintenta en el siguiente ciclo */ }
+  setTimeout(watchJobs, 5000);
+}
+
+/* ------------------------------------------------------------------ componentes */
+
+function stepsHtml(steps, running) {
+  const current = running ? steps.findIndex(s => !s.done) : -1;
+  return `<div class="steps">${steps.map((s, i) => `
+    <div class="step ${s.done ? "done" : i === current ? "current" : ""}">
+      <span class="dot">${s.done ? "✓" : i + 1}</span><span>${esc(s.label)}</span>
+    </div>`).join("")}</div>`;
+}
+
+function jobRow(job) {
+  const pct = job.steps_total ? Math.round((job.steps_done / job.steps_total) * 100) : 0;
+  const req = job.request || {};
+  const extra = job.status === "queued" && job.queue_position ? `· puesto ${job.queue_position} en la cola` : "";
+  return `
+    <a class="job" href="#/trabajo/${esc(job.id)}">
+      <span class="title">${esc(req.tema)}</span>
+      ${pill(job.status)}
+      ${ACTIVE.has(job.status) || job.steps_done ? `<div class="bar" aria-hidden="true"><i style="width:${pct}%"></i></div>` : ""}
+      <span class="meta">
+        <span class="pill lang">${esc((req.idioma || "").toUpperCase())}</span>
+        <span>${esc(req.formato === "horizontal" ? "16:9" : "9:16")}</span>
+        <span>${job.steps_done}/${job.steps_total} pasos ${extra}</span>
+        ${job.cost_usd ? `<span>${fmtCost(job.cost_usd)}</span>` : ""}
+        <span>${fmtDate(job.created_at)}</span>
+      </span>
+    </a>`;
+}
+
+/* ------------------------------------------------------------------ vista: estudio */
+
+function studioForm(prefill = {}) {
+  const prefs = { edad: "6-9", idioma: "es", formato: "vertical", model: CONFIG.default_model, effort: "high", ...loadPrefs(), ...prefill };
+  const ages = ["3-5", "4-6", "6-9", "8-11", "10-12"];
+  if (!ages.includes(prefs.edad)) ages.push(prefs.edad);
+  return `
+  <form id="new-video" class="card stack" novalidate>
+    <div class="row"><h2>Nuevo video</h2><span class="spacer"></span>
+      <label class="row small muted"><input type="checkbox" id="batch-toggle"> Varios temas</label></div>
+    <div class="field" id="single-field">
+      <label for="tema">Tema</label>
+      <input id="tema" name="tema" type="text" class="tema-input" maxlength="200" autocomplete="off"
+        placeholder="Ej.: ¿Por qué el cielo es azul?" value="${esc(prefill.tema || "")}">
+      <span class="hint">Escríbelo en el idioma del video. El agente investiga, escribe el guion, anima y renderiza 60–65 s.</span>
+    </div>
+    <div class="field hidden" id="batch-field">
+      <label for="temas">Temas (uno por línea)</label>
+      <textarea id="temas" placeholder="Los volcanes&#10;Cómo duermen los delfines&#10;¿Por qué brillan las estrellas?"></textarea>
+      <span class="hint">Cada tema entra a la cola como un video aparte, con las mismas opciones.</span>
+    </div>
+    <div class="fields-2">
+      <div class="field">
+        <span class="label">Idioma</span>
+        <div class="segmented" role="radiogroup" aria-label="Idioma">
+          ${CONFIG.languages.map(l => `<label><input type="radio" name="idioma" value="${l}" ${prefs.idioma === l ? "checked" : ""}><span>${LANG[l]}</span></label>`).join("")}
+        </div>
+      </div>
+      <div class="field">
+        <span class="label">Formato</span>
+        <div class="segmented" role="radiogroup" aria-label="Formato">
+          <label><input type="radio" name="formato" value="vertical" ${prefs.formato === "vertical" ? "checked" : ""}><span><i class="ratio v"></i>9:16</span></label>
+          <label><input type="radio" name="formato" value="horizontal" ${prefs.formato === "horizontal" ? "checked" : ""}><span><i class="ratio h"></i>16:9</span></label>
+        </div>
+      </div>
+    </div>
+    <div class="field">
+      <label for="edad">Edad del público</label>
+      <select id="edad" name="edad">${ages.map(a => `<option value="${a}" ${prefs.edad === a ? "selected" : ""}>${a} años</option>`).join("")}</select>
+    </div>
+    <details class="advanced">
+      <summary>Opciones del agente</summary>
+      <div class="fields-2">
+        <div class="field"><label for="model">Modelo</label>
+          <select id="model" name="model">${CONFIG.models.map(m => `<option ${prefs.model === m ? "selected" : ""}>${m}</option>`).join("")}</select></div>
+        <div class="field"><label for="effort">Esfuerzo</label>
+          <select id="effort" name="effort">${CONFIG.efforts.map(e => `<option ${prefs.effort === e ? "selected" : ""}>${e}</option>`).join("")}</select></div>
+      </div>
+      <div class="fields-2">
+        <div class="field"><label for="budget">Tope de gasto (USD)</label>
+          <input id="budget" name="max_budget_usd" type="number" min="0.5" max="1000" step="0.5" placeholder="Sin tope" value="${esc(prefs.max_budget_usd ?? "")}">
+          <span class="hint">Si se alcanza, el trabajo se detiene y puedes reanudarlo.</span></div>
+        <div class="field"><label for="turns">Máximo de turnos</label>
+          <input id="turns" name="max_turns" type="number" min="10" max="2000" step="10" value="${esc(prefs.max_turns ?? 400)}"></div>
+      </div>
+    </details>
+    <p id="form-error" class="small" style="color:var(--warn)" role="alert"></p>
+    <div class="row">
+      <button type="button" class="btn" id="preview-prompt">Ver prompt</button>
+      <span class="spacer"></span>
+      <button type="submit" class="btn primary" id="submit">Producir video</button>
+    </div>
+  </form>`;
+}
+
+function readForm(form) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  const prefs = { edad: data.edad, idioma: data.idioma, formato: data.formato, model: data.model, effort: data.effort,
+                  max_turns: data.max_turns, max_budget_usd: data.max_budget_usd || null };
+  savePrefs(prefs);
+  return { ...prefs, max_turns: Number(data.max_turns) || 400, max_budget_usd: data.max_budget_usd ? Number(data.max_budget_usd) : null };
+}
+
+async function renderStudio(params) {
+  const prefill = { tema: params.get("tema") || "" };
+  for (const key of ["idioma", "formato", "edad"]) if (params.get(key)) prefill[key] = params.get(key);
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Estudio</h1>
+      <p>Escribe un tema y Lía lo convierte en un video de papel de un minuto.</p></div></div>
+    <div class="grid-studio">
+      ${studioForm(prefill)}
+      <section class="card stack" aria-labelledby="queue-title">
+        <div class="row"><h2 id="queue-title">En producción</h2><span class="spacer"></span>
+          <span class="small muted">${CONFIG.concurrency} a la vez</span></div>
+        <div id="active-jobs" class="job-list"></div>
+        <div class="row"><h2>Recientes</h2><span class="spacer"></span><a class="small" href="#/biblioteca">Ver biblioteca</a></div>
+        <div id="recent-jobs" class="job-list"></div>
+      </section>
+    </div>`;
+
+  const form = $("#new-video");
+  const batch = $("#batch-toggle");
+  batch.addEventListener("change", () => {
+    $("#single-field").classList.toggle("hidden", batch.checked);
+    $("#batch-field").classList.toggle("hidden", !batch.checked);
+    $("#submit").textContent = batch.checked ? "Poner en cola" : "Producir video";
+  });
+
+  $("#preview-prompt").addEventListener("click", async () => {
+    const tema = batch.checked ? $("#temas").value.split("\n").map(s => s.trim()).filter(Boolean)[0] : $("#tema").value;
+    try {
+      const res = await api("/api/prompt-preview", { method: "POST", body: { ...readForm(form), tema } });
+      modal(`Prompt para output/${res.slug}/`, `<p class="small muted">Mensaje inicial: ${esc(res.kickoff)}</p><pre>${esc(res.prompt)}</pre>`);
+    } catch (err) { $("#form-error").textContent = err.message; }
+  });
+
+  form.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    $("#form-error").textContent = "";
+    const opts = readForm(form);
+    const temas = batch.checked
+      ? $("#temas").value.split("\n").map(s => s.trim()).filter(Boolean)
+      : [$("#tema").value.trim()];
+    if (!temas[0]) { $("#form-error").textContent = "Escribe un tema."; return; }
+    $("#submit").disabled = true;
+    if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+    const created = [];
+    try {
+      for (const tema of temas) created.push(await api("/api/jobs", { method: "POST", body: { ...opts, tema } }));
+      created.forEach(job => watched.set(job.id, job.status));
+      if (created.length === 1) { location.hash = `#/trabajo/${created[0].id}`; return; }
+      toast(`${created.length} videos en cola.`, "ok");
+      $("#temas").value = "";
+      loadJobs();
+    } catch (err) {
+      $("#form-error").textContent = created.length ? `Se encolaron ${created.length}; luego: ${err.message}` : err.message;
+    } finally { $("#submit").disabled = false; }
+  });
+
+  async function loadJobs() {
+    const jobs = await api("/api/jobs");
+    const active = jobs.filter(j => ACTIVE.has(j.status)).reverse();
+    const recent = jobs.filter(j => !ACTIVE.has(j.status)).slice(0, 5);
+    $("#active-jobs").innerHTML = active.length ? active.map(jobRow).join("")
+      : `<div class="empty"><span class="big">El escenario está libre</span>Los videos en producción aparecerán aquí.</div>`;
+    $("#recent-jobs").innerHTML = recent.length ? recent.map(jobRow).join("") : `<p class="small muted">Todavía no hay trabajos terminados.</p>`;
+  }
+  poll(loadJobs, 4000);
+  $("#tema")?.focus();
+}
+
+/* ------------------------------------------------------------------ vista: trabajo */
+
+async function renderJob(jobId) {
+  let job;
+  try { job = await api(`/api/jobs/${encodeURIComponent(jobId)}`); }
+  catch (err) { view.innerHTML = `<div class="card empty"><span class="big">No encontré ese trabajo</span>${esc(err.message)}</div>`; return; }
+  const req = job.request;
+  view.innerHTML = `
+    <div class="page-head">
+      <div><p class="small"><a href="#/">← Estudio</a></p><h1>${esc(req.tema)}</h1>
+        <p>${esc(LANG[req.idioma])} · ${req.formato === "horizontal" ? "16:9" : "9:16"} · ${esc(req.edad)} años · ${esc(req.model)} (${esc(req.effort)}) · <code>output/${esc(job.slug)}/</code></p></div>
+      <div class="row" id="job-actions"></div>
+    </div>
+    <div class="stack">
+      <section class="card stack">
+        <div class="row"><span id="job-status"></span><span class="spacer"></span>
+          <span class="small muted" id="job-meta"></span></div>
+        <div id="job-steps"></div>
+        <div id="job-error" class="hidden" role="alert"></div>
+        <div id="job-result" class="hidden"></div>
+      </section>
+      <section class="card stack">
+        <div class="row"><h2>Qué está haciendo el agente</h2><span class="spacer"></span>
+          <label class="row small muted"><input type="checkbox" id="show-stderr"> Diagnóstico</label>
+          <label class="row small muted"><input type="checkbox" id="follow" checked> Seguir</label></div>
+        <div class="log hide-stderr" id="log" role="log" aria-live="off"></div>
+      </section>
+    </div>`;
+
+  const log = $("#log");
+  $("#show-stderr").addEventListener("change", e => log.classList.toggle("hide-stderr", !e.target.checked));
+  let startTs = null;
+
+  function paint(j) {
+    job = j;
+    $("#job-status").innerHTML = pill(j.status) + (j.queue_position ? ` <span class="small muted">puesto ${j.queue_position} en la cola</span>` : "");
+    const end = j.finished_at || (ACTIVE.has(j.status) ? Date.now() / 1000 : null);
+    const elapsed = j.started_at && end ? fmtTime(end - j.started_at) : "—";
+    $("#job-meta").textContent = `Tiempo: ${elapsed} · Turnos: ${j.turns || 0} · Costo: ${fmtCost(j.cost_usd)}`;
+    $("#job-steps").innerHTML = stepsHtml(j.steps, j.status === "running");
+    const err = $("#job-error");
+    err.classList.toggle("hidden", !j.error);
+    err.innerHTML = j.error ? `<div class="banner warn" style="padding:0;margin:0"><div>${esc(j.error)}</div></div>` : "";
+    const res = $("#job-result");
+    res.classList.toggle("hidden", !j.result);
+    res.innerHTML = j.result ? `<h3>Resumen del agente</h3>${markdown(j.result)}` : "";
+    const actions = [];
+    if (j.status === "done" || j.steps.some(s => s.done)) actions.push(`<a class="btn" href="#/video/${esc(j.slug)}">${j.status === "done" ? "Ver video" : "Ver archivos"}</a>`);
+    if (ACTIVE.has(j.status)) actions.push(`<button class="btn danger" data-act="cancel">Cancelar</button>`);
+    if (["failed", "cancelled", "interrupted"].includes(j.status)) {
+      actions.push(`<button class="btn primary" data-act="resume">Reanudar</button>`);
+      actions.push(`<button class="btn danger" data-act="delete">Quitar de la lista</button>`);
+    }
+    if (j.status === "done") {
+      const other = req.idioma === "es" ? "en" : "es";
+      actions.push(`<a class="btn" href="#/?tema=${encodeURIComponent(req.tema)}&idioma=${other}&formato=${req.formato}&edad=${encodeURIComponent(req.edad)}">Versión en ${LANG[other]}</a>`);
+    }
+    $("#job-actions").innerHTML = actions.join("");
+  }
+
+  $("#job-actions").addEventListener("click", async ev => {
+    const act = ev.target.closest("[data-act]")?.dataset.act;
+    if (!act) return;
+    if (act === "cancel" && !confirmAction("¿Cancelar este trabajo? Los archivos ya generados se conservan.")) return;
+    if (act === "delete" && !confirmAction("¿Quitar este trabajo de la lista? Los archivos del video no se borran.")) return;
+    try {
+      if (act === "delete") { await api(`/api/jobs/${job.id}`, { method: "DELETE" }); location.hash = "#/"; return; }
+      const updated = await api(`/api/jobs/${job.id}/${act}`, { method: "POST" });
+      watched.set(updated.id, updated.status);
+      if (act === "resume") { renderJob(job.id); return; }
+      paint(updated);
+    } catch (err) { toast(esc(err.message), "err"); }
+  });
+
+  function addLine(ev) {
+    if (startTs == null) startTs = ev.ts;
+    const t = ev.ts - startTs;
+    let tag, msg, cls = ev.kind;
+    switch (ev.kind) {
+      case "text": tag = "agente"; msg = ev.text; break;
+      case "tool": tag = ev.tool; msg = ev.detail; break;
+      case "stderr": tag = "cli"; msg = ev.text; break;
+      case "status": tag = "estado"; msg = STATUS[ev.status] + (ev.error ? ` — ${ev.error}` : ""); break;
+      case "result": tag = "fin"; msg = `${ev.subtype} · ${ev.turns} turnos · ${fmtCost(ev.cost_usd)}`; break;
+      case "session": tag = "sesión"; msg = ev.session_id; cls = "stderr"; break;
+      default: return;
+    }
+    const el = document.createElement("div");
+    el.className = `log-line ${cls}`;
+    el.innerHTML = `<span class="t">${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}</span><span class="tag">${esc(tag)}</span><span class="msg">${esc(msg)}</span>`;
+    log.append(el);
+    if ($("#follow").checked) log.scrollTop = log.scrollHeight;
+  }
+
+  paint(job);
+  const source = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events`);
+  source.onmessage = async e => {
+    const ev = JSON.parse(e.data);
+    if (ev.kind === "steps") { job.steps = ev.steps; paint(job); return; }
+    addLine(ev);
+    if (ev.kind === "status" || ev.kind === "result") paint(await api(`/api/jobs/${encodeURIComponent(jobId)}`));
+  };
+  source.addEventListener("end", () => source.close());
+  onCleanup(() => source.close());
+  poll(async () => { if (ACTIVE.has(job.status)) paint(await api(`/api/jobs/${encodeURIComponent(jobId)}`)); }, 5000);
+}
+
+/* ------------------------------------------------------------------ vista: biblioteca */
+
+async function renderLibrary() {
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Biblioteca</h1><p>Todos los videos en <code>output/</code>, también los hechos desde la terminal.</p></div>
+      <input type="text" class="search" id="search" placeholder="Buscar…" aria-label="Buscar videos"></div>
+    <div id="gallery" class="gallery"></div>`;
+  const videos = await api("/api/videos");
+  const draw = filter => {
+    const list = videos.filter(v => !filter || `${v.title} ${v.slug} ${v.gancho || ""}`.toLowerCase().includes(filter));
+    $("#gallery").innerHTML = list.length ? list.map(v => `
+      <a class="vcard" href="#/video/${esc(v.slug)}">
+        <div class="thumb">${v.has_video ? `<img src="/poster/${esc(v.slug)}.jpg" alt="" loading="lazy" onerror="this.remove()">` : ""}
+          <span class="ph">${esc(v.title)}</span>
+          ${v.duration ? `<span class="dur">${v.duration.toFixed(1)} s</span>` : ""}</div>
+        <div class="body"><strong>${esc(v.title)}</strong>
+          <div class="row small">
+            ${v.idioma ? `<span class="pill lang">${esc(v.idioma.toUpperCase())}</span>` : ""}
+            ${v.has_video ? `<span class="pill done">Video listo</span>` : `<span class="pill">${v.steps_done}/${v.steps_total} pasos</span>`}
+            ${v.qa ? `<span class="pill plain ${v.qa.failed ? "failed" : "done"}">QA ${v.qa.passed}/${v.qa.total}</span>` : ""}
+          </div></div>
+      </a>`).join("")
+      : `<div class="card empty" style="grid-column:1/-1"><span class="big">${filter ? "Sin resultados" : "Aún no hay videos"}</span>${filter ? "" : `<a href="#/">Produce el primero</a>`}</div>`;
+  };
+  draw("");
+  $("#search").addEventListener("input", e => draw(e.target.value.trim().toLowerCase()));
+}
+
+/* ------------------------------------------------------------------ vista previa interactiva */
+
+function stagePreview(container, v) {
+  const [W, H] = (v.formato || v.json?.["script.json"]?.formato) === "horizontal" ? [1920, 1080] : [1080, 1920];
+  const timeline = v.json?.["timeline.json"];
+  const scenes = Array.isArray(timeline) ? timeline : timeline?.scenes || [];
+  const titles = v.json?.["script.json"]?.escenas || [];
+  container.innerHTML = `
+    <div class="preview-frame"><iframe title="Vista previa de stage.html" src="/files/${esc(v.slug)}/stage.html" width="${W}" height="${H}" tabindex="-1"></iframe></div>
+    <div class="controls">
+      <button class="icon-btn" data-c="play" aria-label="Reproducir">▶</button>
+      <button class="icon-btn" data-c="prev" aria-label="Frame anterior">⟨</button>
+      <button class="icon-btn" data-c="next" aria-label="Frame siguiente">⟩</button>
+      <div class="scrub"><div class="marks"></div><input type="range" min="0" step="${1 / 24}" value="0" aria-label="Tiempo"></div>
+      <span class="time">0:00.0</span>
+      <span class="scene-label"></span>
+    </div>
+    ${v.has_mix ? `<audio preload="auto" src="/files/${esc(v.slug)}/mix.wav"></audio>` : ""}`;
+  const frame = $(".preview-frame", container), iframe = $("iframe", container);
+  const range = $("input[type=range]", container), audio = $("audio", container);
+  let duration = 60, t = 0, playing = false, raf = 0, t0 = 0;
+
+  const fit = () => {
+    const scale = frame.clientWidth / W;
+    iframe.style.transform = `scale(${scale})`;
+    frame.style.height = `${H * scale}px`;
+  };
+  const ro = new ResizeObserver(fit);
+  ro.observe(frame);
+  onCleanup(() => { ro.disconnect(); cancelAnimationFrame(raf); audio?.pause(); });
+
+  const draw = () => {
+    try { iframe.contentWindow.renderAt?.(t); } catch { /* aún cargando */ }
+    range.value = t;
+    $(".time", container).textContent = `${fmtClock(t)} / ${fmtClock(duration)}`;
+    const i = scenes.findIndex(s => t >= s.start && t < s.end);
+    $(".scene-label", container).textContent = i >= 0 ? `Escena ${i + 1}${titles[i]?.titulo ? ` · ${titles[i].titulo}` : ""}${titles[i]?.vo ? ` — “${titles[i].vo}”` : ""}` : "";
+  };
+  const seek = to => { t = Math.max(0, Math.min(duration, to)); if (audio) audio.currentTime = t; t0 = performance.now() - t * 1000; draw(); };
+  const loop = () => {
+    t = audio ? audio.currentTime : (performance.now() - t0) / 1000;
+    if (t >= duration) { t = duration; stop(); }
+    draw();
+    if (playing) raf = requestAnimationFrame(loop);
+  };
+  const play = () => { if (t >= duration) seek(0); playing = true; t0 = performance.now() - t * 1000; audio?.play().catch(() => {}); $("[data-c=play]", container).textContent = "❚❚"; loop(); };
+  const stop = () => { playing = false; audio?.pause(); $("[data-c=play]", container).textContent = "▶"; };
+
+  iframe.addEventListener("load", () => {
+    try { duration = Number(iframe.contentWindow.DURATION) || duration; } catch { /* sin DURATION */ }
+    range.max = duration;
+    $(".marks", container).innerHTML = scenes.slice(1).map(s => `<i style="left:${(s.start / duration) * 100}%"></i>`).join("");
+    fit(); draw();
+  });
+  range.addEventListener("input", () => seek(Number(range.value)));
+  container.addEventListener("click", e => {
+    const c = e.target.closest("[data-c]")?.dataset.c;
+    if (c === "play") playing ? stop() : play();
+    if (c === "prev") { stop(); seek(t - 1 / 24); }
+    if (c === "next") { stop(); seek(t + 1 / 24); }
+  });
+}
+
+/* ------------------------------------------------------------------ vista: video */
+
+async function renderVideo(slug) {
+  let v;
+  try { v = await api(`/api/videos/${encodeURIComponent(slug)}`); }
+  catch (err) { view.innerHTML = `<div class="card empty"><span class="big">No encontré ese video</span>${esc(err.message)}</div>`; return; }
+  const script = v.json["script.json"] || {};
+  const publish = v.json["publish.json"] || {};
+  const lastJob = v.jobs[0];
+  const running = v.jobs.find(j => ACTIVE.has(j.status));
+  const req = lastJob?.request || { tema: v.title, idioma: v.idioma || "es", formato: v.formato || "vertical", edad: "6-9" };
+  const other = (v.idioma || req.idioma) === "es" ? "en" : "es";
+
+  const tabs = [];
+  if (publish.titulos || publish.descripcion) tabs.push(["publish", "Publicación"]);
+  if (script.escenas) tabs.push(["script", "Guion"]);
+  if (v.texts["research.md"]) tabs.push(["research", "Investigación"]);
+  if (v.texts["qa.md"]) tabs.push(["qa", "QA"]);
+  if (v.texts["bible.md"]) tabs.push(["bible", "Biblia visual"]);
+  tabs.push(["files", "Archivos"]);
+  if (v.jobs.length) tabs.push(["history", "Historial"]);
+
+  view.innerHTML = `
+    <div class="page-head">
+      <div><p class="small"><a href="#/biblioteca">← Biblioteca</a></p><h1>${esc(v.title)}</h1>
+        <p>${v.duration ? `${v.duration.toFixed(1)} s · ` : ""}${esc(LANG[v.idioma] || "")} · <code>output/${esc(v.slug)}/</code></p></div>
+      <div class="row">
+        ${running ? `<a class="btn" href="#/trabajo/${esc(running.id)}">Ver producción en curso</a>` : ""}
+        ${!running && lastJob && lastJob.status !== "done" ? `<a class="btn primary" href="#/trabajo/${esc(lastJob.id)}">Continuar producción</a>` : ""}
+        <a class="btn" href="#/?tema=${encodeURIComponent(req.tema)}&idioma=${other}&formato=${esc(req.formato)}&edad=${encodeURIComponent(req.edad)}">Versión en ${LANG[other]}</a>
+        <button class="btn danger" id="delete-video" ${running ? "disabled" : ""}>Borrar</button>
+      </div>
+    </div>
+    <div class="video-layout">
+      <div class="stack">
+        ${v.has_video && v.has_stage ? `<div class="segmented" role="tablist" aria-label="Reproductor">
+          <label><input type="radio" name="pv" value="video" checked><span>Video final</span></label>
+          <label><input type="radio" name="pv" value="stage"><span>Vista interactiva</span></label></div>` : ""}
+        <div class="player" id="player"></div>
+        ${v.has_video ? `<div class="row"><a class="btn small" href="/files/${esc(v.slug)}/final.mp4" download="${esc(v.slug)}.mp4">Descargar MP4</a>
+          ${v.files.some(f => f.name === "subtitles.srt") ? `<a class="btn small" href="/files/${esc(v.slug)}/subtitles.srt" download>Subtítulos .srt</a>` : ""}</div>` : ""}
+        <section class="card stack">
+          <h2>Progreso</h2>${stepsHtml(v.steps, !!running)}
+        </section>
+      </div>
+      <section class="card">
+        <div class="tabbar" role="tablist">${tabs.map(([k, label], i) => `<button role="tab" data-tab="${k}" aria-selected="${i === 0}">${label}</button>`).join("")}</div>
+        <div id="tab-body"></div>
+      </section>
+    </div>`;
+
+  const player = $("#player");
+  const showVideo = () => { player.innerHTML = `<video controls playsinline preload="metadata" poster="/poster/${esc(v.slug)}.jpg" src="/files/${esc(v.slug)}/final.mp4"></video>`; };
+  if (v.has_video) showVideo();
+  else if (v.has_stage) stagePreview(player, v);
+  else player.innerHTML = `<div class="empty" style="color:var(--cream)"><span class="big" style="color:var(--cream)">Todavía no hay imagen</span>Aparecerá cuando el agente escriba stage.html.</div>`;
+  $$("input[name=pv]").forEach(r => r.addEventListener("change", () => (r.value === "video" ? showVideo() : stagePreview(player, v))));
+
+  const bodies = {
+    publish: () => `
+      <div class="stack">
+        ${(publish.titulos || []).length ? `<h3>Títulos</h3>${publish.titulos.map(t => copyRow(t)).join("")}` : ""}
+        ${publish.descripcion ? `<h3>Descripción</h3>${copyRow(publish.descripcion)}` : ""}
+        ${(publish.hashtags || []).length ? `<h3>Hashtags</h3>${copyRow(publish.hashtags.join(" "))}` : ""}
+        <p class="small muted">${publish.texto_portada ? `Portada: “${esc(publish.texto_portada)}” en ${esc(publish.frame_portada_s)} s · ` : ""}${publish.hecho_para_ninos ? "Marcar como «Hecho para niños»" : ""}</p>
+        ${(publish.ideas_siguientes || []).length ? `<h3>Ideas para los siguientes videos</h3><div class="chips">${publish.ideas_siguientes.map(i =>
+          `<a class="chip" href="#/?tema=${encodeURIComponent(i)}&idioma=${esc(v.idioma || "es")}&formato=${esc(req.formato)}&edad=${encodeURIComponent(req.edad)}">+ ${esc(i)}</a>`).join("")}</div>` : ""}
+      </div>`,
+    script: () => `
+      ${script.gancho ? `<p><strong>Gancho:</strong> ${esc(script.gancho)}</p>` : ""}
+      ${script.bucle_abierto ? `<p class="small muted">Bucle abierto: ${esc(script.bucle_abierto)}</p>` : ""}
+      ${(script.escenas || []).map(s => `
+        <div class="scene"><span class="n">${esc(s.n)}</span><div>
+          <strong>${esc(s.titulo || "")}</strong><p class="vo">“${esc(s.vo || "")}”</p>
+          ${s.visual ? `<div class="extra"><strong>Visual:</strong> ${esc(s.visual)}</div>` : ""}
+          ${s.transition ? `<div class="extra"><strong>Transición:</strong> ${esc(s.transition)}</div>` : ""}
+          ${(s.sfx || []).length ? `<div class="extra"><strong>Efectos:</strong> ${s.sfx.map(esc).join(", ")}</div>` : ""}
+        </div></div>`).join("")}`,
+    research: () => markdown(v.texts["research.md"]),
+    bible: () => markdown(v.texts["bible.md"]),
+    qa: () => `${v.qa ? `<div class="qa-score">${v.qa.failed ? `<span class="pill failed">${v.qa.failed} sin cumplir</span>` : `<span class="pill done">Todo cumple</span>`}
+      <span class="small muted">${v.qa.passed} de ${v.qa.total} puntos</span></div>` : ""}${markdown(v.texts["qa.md"])}`,
+    files: () => `<table class="files"><tbody>${v.files.map(f => `
+      <tr><td><a href="/files/${esc(v.slug)}/${f.name.split("/").map(encodeURIComponent).join("/")}" target="_blank" rel="noopener">${esc(f.name)}</a></td><td>${fmtSize(f.size)}</td></tr>`).join("")}</tbody></table>`,
+    history: () => `<div class="job-list">${v.jobs.map(j => jobRow({ ...j, steps_done: v.steps_done, steps_total: v.steps_total })).join("")}</div>`,
+  };
+  const showTab = key => {
+    $$(".tabbar button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === key));
+    $("#tab-body").innerHTML = bodies[key]();
+  };
+  $(".tabbar").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) showTab(b.dataset.tab); });
+  showTab(tabs[0][0]);
+
+  $("#tab-body").addEventListener("click", async e => {
+    const btn = e.target.closest("[data-copy]");
+    if (!btn) return;
+    try { await navigator.clipboard.writeText(btn.dataset.copy); btn.textContent = "Copiado"; setTimeout(() => (btn.textContent = "Copiar"), 1500); }
+    catch { toast("No se pudo copiar.", "err"); }
+  });
+  $("#delete-video").addEventListener("click", async () => {
+    if (!confirmAction(`¿Borrar output/${v.slug}/ con todos sus archivos? No se puede deshacer.`)) return;
+    try { await api(`/api/videos/${encodeURIComponent(v.slug)}`, { method: "DELETE" }); toast("Video borrado.", "ok"); location.hash = "#/biblioteca"; }
+    catch (err) { toast(esc(err.message), "err"); }
+  });
+}
+
+function copyRow(text) {
+  return `<div class="copy-row"><span>${esc(text)}</span><button class="btn small" data-copy="${esc(text)}">Copiar</button></div>`;
+}
+
+/* ------------------------------------------------------------------ vista: sistema */
+
+async function renderSystem() {
+  view.innerHTML = `<div class="page-head"><div><h1>Sistema</h1><p>Lo que el agente necesita en este equipo para producir los videos.</p></div></div>
+    <div class="grid-studio"><section class="card stack" id="deps"><p class="muted">Revisando…</p></section>
+    <section class="card stack" id="about"></section></div>`;
+  const health = await api("/api/health");
+  const group = (kind, title) => `<h2>${title}</h2><ul class="checklist">${health.items.filter(i => i.kind === kind).map(i => `
+    <li class="${i.ok ? "ok" : i.optional ? "" : "bad"}"><span class="mark">${i.ok ? "✓" : i.optional ? "·" : "✗"}</span>
+      <code>${esc(i.name)}</code><span class="why small muted">${esc(i.why)}${!i.ok && i.optional ? " (opcional)" : ""}</span></li>`).join("")}</ul>`;
+  $("#deps").innerHTML = `
+    <div class="row">${health.ok ? `<span class="pill done">Todo listo</span>` : `<span class="pill failed">Faltan dependencias</span>`}</div>
+    ${group("bin", "Programas")}${group("module", "Módulos de Python")}
+    <h2>Fuentes</h2><p class="small">${health.fonts.length ? health.fonts.map(esc).join(", ") : "Ninguna en assets/fonts/ (el agente las descargará)."}</p>
+    ${health.ok ? "" : `<p class="small">Para instalar lo que falta:</p><pre class="cmd">./setup.sh</pre>`}`;
+  $("#about").innerHTML = `
+    <h2>Cómo funciona</h2>
+    <p>Cada video es un trabajo en cola. El agente de Claude sigue el pipeline de <code>prompts/system_prompt.md</code> y
+      escribe todo en <code>output/&lt;slug&gt;/</code>. Voz, música, animación y render corren en este equipo.</p>
+    <p>Se producen <strong>${CONFIG.concurrency}</strong> video(s) a la vez. Cambia el número con <code>--concurrency</code>.</p>
+    <h2>Modelo</h2>
+    <p>Por defecto <code>${esc(CONFIG.default_model)}</code>. Puedes elegir otro en «Opciones del agente».</p>
+    <h2>Seguridad</h2>
+    <p class="small">El agente ejecuta comandos y edita archivos sin pedir confirmación. La app escucha solo en este equipo;
+      si la expones con <code>--host 0.0.0.0</code>, pide un token de acceso.</p>
+    ${CONFIG.demo ? `<p class="pill running">Modo demostración activo</p>` : ""}`;
+}
+
+/* ------------------------------------------------------------------ enrutador */
+
+async function route() {
+  cleanup.forEach(fn => fn());
+  cleanup = [];
+  const [path, query = ""] = location.hash.replace(/^#/, "").split("?");
+  const parts = path.split("/").filter(Boolean);
+  const params = new URLSearchParams(query);
+  const section = parts[0] === "biblioteca" || parts[0] === "video" ? "library" : parts[0] === "sistema" ? "system" : "studio";
+  $$("[data-nav]").forEach(a => (a.dataset.nav === section ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
+  try {
+    if (parts[0] === "trabajo" && parts[1]) await renderJob(decodeURIComponent(parts[1]));
+    else if (parts[0] === "video" && parts[1]) await renderVideo(decodeURIComponent(parts[1]));
+    else if (parts[0] === "biblioteca") await renderLibrary();
+    else if (parts[0] === "sistema") await renderSystem();
+    else await renderStudio(params);
+  } catch (err) {
+    view.innerHTML = `<div class="card empty"><span class="big">Algo salió mal</span>${esc(err.message)}</div>`;
+  }
+  window.scrollTo(0, 0);
+}
+
+(async function init() {
+  try {
+    CONFIG = await api("/api/config");
+  } catch (err) {
+    view.innerHTML = `<div class="card empty"><span class="big">No hay conexión con el servidor</span>${esc(err.message)}</div>`;
+    return;
+  }
+  window.addEventListener("hashchange", route);
+  refreshBanner();
+  watchJobs();
+  route();
+})();

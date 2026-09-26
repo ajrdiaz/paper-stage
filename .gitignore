@@ -6,3 +6,5 @@ output/*/frames/
 output/*/audio/
 output/*/*.wav
 output/*/agent_log.jsonl
+data/
+output/*/poster.jpg

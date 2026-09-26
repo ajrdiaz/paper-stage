@@ -1,4 +1,8 @@
 claude-agent-sdk>=0.2
+# Aplicación web (Starlette y uvicorn también llegan como dependencias del SDK)
+starlette>=0.40
+uvicorn>=0.30
+# Pipeline local de audio y render
 kokoro>=0.9
 soundfile
 numpy
