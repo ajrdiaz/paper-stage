@@ -25,8 +25,8 @@ El agente necesita credenciales de Claude: `ANTHROPIC_API_KEY`, o una sesión de
 ## Aplicación web
 
 ```bash
-python -m paper_stage              # http://127.0.0.1:8000/
-python -m paper_stage --demo       # sin Claude y sin costo, para probar la interfaz
+./run.sh                           # imprime la URL, p. ej. http://127.0.0.1:53817/
+./run.sh --demo                    # sin Claude y sin costo, para probar la interfaz
 ```
 
 - **Estudio**: escribe un tema, elige idioma, formato (9:16 o 16:9) y edad, y el video entra a una cola. Puedes poner varios temas a la vez (uno por línea) y ver el prompt exacto antes de lanzarlo. Las opciones que uses se recuerdan.
@@ -40,7 +40,7 @@ python -m paper_stage --demo       # sin Claude y sin costo, para probar la inte
 | Opción | Por defecto | |
 |---|---|---|
 | `--host` | `127.0.0.1` | Con otra dirección (p. ej. `0.0.0.0`) se exige un token de acceso; se genera uno si no defines `PAPER_STAGE_TOKEN`. |
-| `--port` | `8000` | |
+| `--port` | aleatorio | Por defecto el sistema elige un puerto libre, así que varias instancias no chocan. |
 | `--concurrency` | `1` | Videos que se producen a la vez. El render usa mucha CPU. |
 | `--demo` | apagado | Agente simulado que genera un video de ejemplo. |
 

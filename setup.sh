@@ -15,7 +15,23 @@ else
 fi
 
 echo "==> Entorno de Python (.venv)"
-python3 -m venv .venv
+# claude-agent-sdk y Kokoro piden Python 3.10–3.12 (el python3 de macOS es 3.9).
+PY_OK='import sys; sys.exit(not ((3, 10) <= sys.version_info[:2] <= (3, 12)))'
+PYTHON=""
+for cand in "${PYTHON_BIN:-}" python3.12 python3.11 python3.10 python3; do
+  if [ -n "$cand" ] && command -v "$cand" >/dev/null && "$cand" -c "$PY_OK" 2>/dev/null; then
+    PYTHON="$cand"; break
+  fi
+done
+if [ -z "$PYTHON" ]; then
+  echo "Se necesita Python 3.10–3.12 (p. ej. 'brew install python@3.12'), o indícalo con PYTHON_BIN=/ruta/python." >&2
+  exit 1
+fi
+if [ -x .venv/bin/python ] && ! .venv/bin/python -c "$PY_OK" 2>/dev/null; then
+  echo "El .venv usa $(.venv/bin/python --version 2>&1); se recrea con $("$PYTHON" --version 2>&1)."
+  rm -rf .venv
+fi
+"$PYTHON" -m venv .venv
 .venv/bin/pip install -q --upgrade pip
 # En Linux, PyTorch (dependencia de Kokoro) trae CUDA por defecto (varios GB).
 # Usamos la versión CPU salvo que se pida GPU con USE_CUDA=1.

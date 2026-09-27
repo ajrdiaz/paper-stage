@@ -140,6 +140,8 @@ for i in range(int(DURATION*24)):
 # ffmpeg -framerate 24 -i frames/%05d.png -i mix.wav -c:v libx264 -pix_fmt yuv420p -crf 18 -c:a aac -b:a 192k -shortest final.mp4
 ```
 
+Ejecuta el render (y cualquier comando largo) **en primer plano**, con `timeout` de hasta 7200000 ms, y espera a que termine. No lo lances en segundo plano ni termines tu turno para "esperar": si terminas el turno, el proceso se cierra y el render se pierde. Haz que `render.py` salte los frames que ya existen, para poder retomarlo si se corta.
+
 ## 8. Música y efectos generados por código (costo cero)
 
 Igual que en el video de referencia, donde la música y los efectos se crean en el navegador, pero exportados a WAV para el video:

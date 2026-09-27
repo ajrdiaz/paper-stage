@@ -7,6 +7,7 @@ emitiendo eventos simples (texto, herramienta, resultado) para mostrar el progre
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -31,6 +32,16 @@ EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 LANGUAGES = ["es", "en"]
 FORMATS = ["vertical", "horizontal"]
 ALLOWED_TOOLS = ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"]
+MAX_MESSAGE_BYTES = 64 * 1024 * 1024
+# El agente corre en un solo turno: cuando lo cierra, el proceso de Claude Code termina
+# y mata cualquier tarea en segundo plano (p. ej. un render a medias). Por eso todo va
+# en primer plano, con tiempo de sobra para renderizar, y sin herramientas de "esperar".
+AGENT_ENV = {
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+    "BASH_DEFAULT_TIMEOUT_MS": str(60 * 60 * 1000),
+    "BASH_MAX_TIMEOUT_MS": str(2 * 60 * 60 * 1000),
+}
+DISALLOWED_TOOLS = ["ScheduleWakeup", "Monitor", "CronCreate", "RemoteTrigger"]
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 AGE_RE = re.compile(r"^\d{1,2}(-\d{1,2})?$")
@@ -187,6 +198,34 @@ def _jsonable(message: object) -> dict:
     return {"type": type(message).__name__, **data}
 
 
+def _last_result(log_path: Path, session_id: str) -> dict | None:
+    """Último ResultMessage de la sesión en agent_log.jsonl."""
+    last = None
+    with contextlib.suppress(OSError):
+        with log_path.open(encoding="utf-8") as log:
+            for line in log:
+                if '"ResultMessage"' not in line:
+                    continue
+                with contextlib.suppress(ValueError):
+                    row = json.loads(line)
+                    if row.get("type") == "ResultMessage" and row.get("session_id") == session_id:
+                        last = row
+    return last
+
+
+def _includes(result: dict, earlier: dict) -> bool:
+    """¿El acumulado de `result` ya contiene todo lo que informó `earlier`?"""
+    if (result.get("total_cost_usd") or 0) < (earlier.get("total_cost_usd") or 0):
+        return False
+    usage = result.get("model_usage") or {}
+    for model, old in (earlier.get("model_usage") or {}).items():
+        new = usage.get(model)
+        if not new or any((new.get(k) or 0) < (old.get(k) or 0)
+                          for k in ("inputTokens", "outputTokens", "cacheReadInputTokens")):
+            return False
+    return True
+
+
 async def run_agent(
     req: VideoRequest,
     *,
@@ -202,6 +241,9 @@ async def run_agent(
       {"kind": "tool", "tool": ..., "detail": ...}
       {"kind": "result", "ok": bool, "subtype": ..., "turns": int, "cost_usd": float|None,
        "session_id": ..., "text": ...}
+    cost_usd es lo gastado desde el resultado anterior de la sesión. Claude Code informa
+    un acumulado: repite el resultado al cerrar y, al reanudar, a veces arrastra lo
+    gastado en ejecuciones anteriores; sumar sus cifras tal cual cuenta todo varias veces.
     Además escribe el registro completo en output/<slug>/agent_log.jsonl.
     """
     from claude_agent_sdk import (
@@ -220,23 +262,32 @@ async def run_agent(
         effort=req.effort,
         cwd=str(ROOT),
         allowed_tools=ALLOWED_TOOLS,
+        disallowed_tools=DISALLOWED_TOOLS,
+        env=AGENT_ENV,
         permission_mode="acceptEdits",
         max_turns=req.max_turns,
         max_budget_usd=req.max_budget_usd,
         resume=resume_session,
         stderr=on_stderr,
+        # Al leer fotogramas y portadas, la imagen llega en base64 en un solo
+        # mensaje y supera con facilidad el límite de 1 MB del SDK.
+        max_buffer_size=MAX_MESSAGE_BYTES,
     )
     prompt = kickoff_prompt(req, resume=continuing or resume_session is not None)
 
     req.out_dir.mkdir(parents=True, exist_ok=True)
+    log_path = req.out_dir / "agent_log.jsonl"
+    previous = _last_result(log_path, resume_session) if resume_session else None
+    reported: float | None = None  # acumulado ya contabilizado en esta ejecución
     session_seen = False
     # async for no cierra el generador si el bucle se interrumpe (p. ej. al cancelar);
     # aclose() garantiza que el SDK termine el proceso de Claude Code.
     messages = query(prompt=prompt, options=options)
     try:
-        with (req.out_dir / "agent_log.jsonl").open("a", encoding="utf-8") as log:
+        with log_path.open("a", encoding="utf-8") as log:
             async for message in messages:
-                log.write(json.dumps(_jsonable(message), ensure_ascii=False, default=str) + "\n")
+                row = _jsonable(message)
+                log.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
                 log.flush()
                 if isinstance(message, SystemMessage) and not session_seen:
                     session_id = message.data.get("session_id")
@@ -251,12 +302,19 @@ async def run_agent(
                             yield {"kind": "tool", "tool": block.name,
                                    "detail": describe_tool(block.name, block.input)}
                 elif isinstance(message, ResultMessage):
+                    spent = None
+                    if message.total_cost_usd is not None:
+                        if reported is None:
+                            carried = previous is not None and _includes(row, previous)
+                            reported = previous["total_cost_usd"] if carried else 0.0
+                        spent = max(message.total_cost_usd - reported, 0.0)
+                        reported = max(reported, message.total_cost_usd)
                     yield {
                         "kind": "result",
                         "ok": not message.is_error,
                         "subtype": message.subtype,
                         "turns": message.num_turns,
-                        "cost_usd": message.total_cost_usd,
+                        "cost_usd": spent,
                         "session_id": message.session_id,
                         "text": (message.result or "").strip(),
                     }

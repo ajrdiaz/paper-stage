@@ -4,6 +4,7 @@ Usan el agente de demostración (sin Claude) y directorios temporales.
 """
 
 import asyncio
+import json
 import os
 import sqlite3
 import tempfile
@@ -62,6 +63,19 @@ class CoreTests(unittest.TestCase):
                     dict(tema="Volcanes", idioma="fr"), dict(tema="Volcanes", max_budget_usd=0.1)):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 core.VideoRequest(**bad).validate()
+
+    def test_resumed_cost_is_not_counted_twice(self):
+        def result(cost, out, session="s1"):
+            return {"type": "ResultMessage", "session_id": session, "total_cost_usd": cost,
+                    "model_usage": {"opus": {"inputTokens": 10, "outputTokens": out,
+                                             "cacheReadInputTokens": out * 30}}}
+        first = result(4.48, 117281)
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "agent_log.jsonl"
+            log.write_text("\n".join(json.dumps(r) for r in (first, result(1, 5, "otra"))) + "\n")
+            self.assertEqual(core._last_result(log, "s1"), first)
+        self.assertTrue(core._includes(result(6.15, 125875), first))   # arrastra lo anterior
+        self.assertFalse(core._includes(result(1.67, 8594), first))    # solo esta ejecución
 
 
 class AppTests(unittest.TestCase):
