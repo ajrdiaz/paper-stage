@@ -6,6 +6,7 @@ Usan el agente de demostración (sin Claude) y directorios temporales.
 import asyncio
 import json
 import os
+import shutil
 import sqlite3
 import tempfile
 import time
@@ -64,6 +65,16 @@ class CoreTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 core.VideoRequest(**bad).validate()
 
+    def test_cta(self):
+        req = core.VideoRequest(tema="Volcanes", idioma="en")
+        req.validate()
+        self.assertEqual(req.variables()["CTA"], core.DEFAULT_CTA["en"])
+        req = core.VideoRequest(tema="Volcanes", cta="  ¡Nos vemos   pronto!  ")
+        req.validate()
+        self.assertIn('"¡Nos vemos pronto!"', core.render_prompt(req.variables()))
+        with self.assertRaises(ValueError):
+            core.VideoRequest(tema="Volcanes", cta="x" * 81).validate()
+
     def test_resumed_cost_is_not_counted_twice(self):
         def result(cost, out, session="s1"):
             return {"type": "ResultMessage", "session_id": session, "total_cost_usd": cost,
@@ -91,16 +102,26 @@ class AppTests(unittest.TestCase):
             self.assertEqual(job["status"], "done", job["error"])
             self.assertTrue(all(s["done"] for s in job["steps"]))
 
-            # El mismo tema otra vez recibe otra carpeta.
-            again = client.post("/api/jobs", json={"tema": "Los delfines", "idioma": "es"}).json()
-            self.assertEqual(again["slug"], "los-delfines-es-2")
-            wait_for(client, again["id"], {"done", "failed"})
+            # Los temas no se repiten (aunque cambien mayúsculas, tildes o signos)…
+            res = client.post("/api/jobs", json={"tema": "¡Los DELFINES!", "idioma": "es"})
+            self.assertEqual(res.status_code, 400, res.text)
+            # …pero uno parecido sí vale.
+            again = client.post("/api/jobs", json={"tema": "Los delfines rosados", "idioma": "es"})
+            self.assertEqual(again.status_code, 201, again.text)
+            wait_for(client, again.json()["id"], {"done", "failed"})
 
             videos = {v["slug"]: v for v in client.get("/api/videos").json()}
             self.assertIn("los-delfines-es", videos)
             detail = client.get("/api/videos/los-delfines-es").json()
             self.assertEqual(len(detail["json"]["script.json"]["escenas"]), 7)
             self.assertEqual(detail["jobs"][0]["id"], job["id"])
+            self.assertEqual([s["key"] for s in detail["steps"]][-4:], ["preqa", "render", "publish", "qa"])
+            if shutil.which("ffmpeg"):
+                # El video demo es de 540×960: la app lo detecta aunque qa.md no lo diga.
+                checks = {c["label"]: c["ok"] for c in detail["verify"]["checks"]}
+                self.assertFalse(detail["verify"]["ok"])
+                self.assertFalse(checks["Resolución"])
+                self.assertTrue(checks["5 hashtags"])
             self.assertEqual(client.get("/files/los-delfines-es/stage.html").status_code, 200)
             self.assertEqual(client.get("/files/los-delfines-es/../../data/paper_stage.db").status_code, 404)
             self.assertEqual(client.get("/files/los-delfines-es/agent_log.jsonl").status_code, 404)
@@ -108,10 +129,12 @@ class AppTests(unittest.TestCase):
 
             events = client.get(f"/api/jobs/{job['id']}/events").text
             self.assertIn('"kind": "tool"', events)
+            if shutil.which("ffmpeg"):
+                self.assertIn("Revisión automática de la app, no cumple", events)
             self.assertTrue(events.rstrip().endswith("data: {}"))
 
-            self.assertEqual(client.delete("/api/videos/los-delfines-es-2").status_code, 200)
-            self.assertFalse((core.OUTPUT_DIR / "los-delfines-es-2").exists())
+            self.assertEqual(client.delete("/api/videos/los-delfines-rosados-es").status_code, 200)
+            self.assertFalse((core.OUTPUT_DIR / "los-delfines-rosados-es").exists())
 
     def test_cancel_and_resume(self):
         with self.make_client(runner=slow_runner, data="data-cancel") as client:
@@ -155,6 +178,21 @@ class AppTests(unittest.TestCase):
             login = client.get("/?token=secreto", follow_redirects=False)
             self.assertEqual(login.status_code, 307)
             self.assertEqual(client.get("/api/config").status_code, 200)  # cookie
+
+    def test_suggestions_never_repeat(self):
+        with self.make_client(data="data-suggest") as client:
+            res = client.post("/api/jobs", json={"tema": "¿Por qué el mar es salado?", "idioma": "es"})
+            wait_for(client, res.json()["id"], {"done", "failed"})
+            shown = []
+            for _ in range(2):
+                res = client.post("/api/suggest", json={"idioma": "es", "edad": "6-9", "evitar": shown})
+                self.assertEqual(res.status_code, 200, res.text)
+                temas = [t["tema"] for t in res.json()["temas"]]
+                self.assertEqual(len(temas), 3)
+                shown += temas
+            keys = [core.topic_key(t, "es") for t in shown]
+            self.assertEqual(len(set(keys)), 6)
+            self.assertNotIn(core.topic_key("¿Por qué el mar es salado?", "es"), keys)
 
     def test_prompt_preview_and_errors(self):
         with self.make_client(data="data-preview") as client:

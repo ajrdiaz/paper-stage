@@ -9,6 +9,7 @@ import json
 import os
 from dataclasses import fields
 from pathlib import Path
+from typing import Callable
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -72,7 +73,8 @@ class TokenAuth(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-def create_app(manager: JobManager | None = None, token: str | None = None) -> Starlette:
+def create_app(manager: JobManager | None = None, token: str | None = None,
+               suggester: Callable | None = None) -> Starlette:
     if manager is None:
         runner = None
         if os.environ.get("PAPER_STAGE_DEMO") == "1":
@@ -84,6 +86,11 @@ def create_app(manager: JobManager | None = None, token: str | None = None) -> S
             concurrency=int(os.environ.get("PAPER_STAGE_CONCURRENCY", "1")),
         )
     demo = manager.runner is not core.run_agent
+    if suggester is None:
+        if demo:
+            from .demo import suggest_demo as suggester
+        else:
+            suggester = core.suggest_topics
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -97,7 +104,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None) -> S
         return JSONResponse({
             "models": core.MODELS, "default_model": core.DEFAULT_MODEL,
             "efforts": core.EFFORTS, "languages": core.LANGUAGES, "formats": core.FORMATS,
-            "demo": demo, "concurrency": manager.concurrency,
+            "demo": demo, "concurrency": manager.concurrency, "default_cta": core.DEFAULT_CTA,
         })
 
     async def health(request: Request):
@@ -111,6 +118,35 @@ def create_app(manager: JobManager | None = None, token: str | None = None) -> S
                                  "kickoff": core.kickoff_prompt(req)})
         except (ValueError, TypeError) as exc:
             return _error(str(exc))
+
+    async def suggest(request: Request):
+        """3 temas nuevos: ni ya producidos o en cola, ni entre los que ya se mostraron."""
+        payload = await _json(request)
+        idioma, edad = payload.get("idioma") or "es", str(payload.get("edad") or "6-9")
+        if idioma not in core.LANGUAGES or not core.AGE_RE.match(edad):
+            return _error("Idioma o edad no válidos.")
+        pista = " ".join(str(payload.get("pista") or "").split())[:120]
+        shown = [" ".join(str(t).split()) for t in (payload.get("evitar") or [])][:60]
+        used = await asyncio.to_thread(manager.used_topics, idioma)
+        try:
+            ideas = await suggester(idioma, edad, pista, used + shown, 6)
+        except Exception as exc:  # noqa: BLE001 — credenciales, red o respuesta rara del modelo
+            return _error(f"No se pudieron sugerir temas: {exc}", 502)
+        taken = {core.topic_key(t, idioma) for t in used + shown}
+        picked = []
+        for idea in ideas:
+            key = core.topic_key(idea["tema"], idioma)
+            if key in taken or not 2 <= len(idea["tema"]) <= 200:
+                continue
+            if await asyncio.to_thread(manager.is_used, idea["tema"], idioma):
+                continue
+            taken.add(key)
+            picked.append(idea)
+            if len(picked) == 3:
+                break
+        if not picked:
+            return _error("No salieron temas nuevos. Prueba otra vez o cambia la pista.", 502)
+        return JSONResponse({"temas": picked})
 
     # ------------------------------------------------------------------ trabajos
 
@@ -211,6 +247,14 @@ def create_app(manager: JobManager | None = None, token: str | None = None) -> S
         image = await asyncio.to_thread(library.poster, out_dir)
         return FileResponse(image) if image else _error("Sin portada.", 404)
 
+    async def cover(request: Request):
+        try:
+            out_dir = library.slug_dir(request.path_params["slug"])
+        except ValueError:
+            return _error("Video no válido.", 400)
+        image = await asyncio.to_thread(library.cover, out_dir)
+        return FileResponse(image) if image else _error("Sin portada.", 404)
+
     async def output_file(request: Request):
         try:
             out_dir = library.slug_dir(request.path_params["slug"]).resolve()
@@ -229,6 +273,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None) -> S
         Route("/api/config", config),
         Route("/api/health", health),
         Route("/api/prompt-preview", prompt_preview, methods=["POST"]),
+        Route("/api/suggest", suggest, methods=["POST"]),
         Route("/api/jobs", list_jobs),
         Route("/api/jobs", create_job, methods=["POST"]),
         Route("/api/jobs/{job_id}", get_job),
@@ -240,6 +285,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None) -> S
         Route("/api/videos/{slug}", get_video),
         Route("/api/videos/{slug}", delete_video, methods=["DELETE"]),
         Route("/poster/{slug}.jpg", poster),
+        Route("/cover/{slug}.jpg", cover),
         Route("/files/{slug}/{path:path}", output_file),
         Mount("/static", StaticFiles(directory=STATIC_DIR), name="static"),
         Mount("/fonts", StaticFiles(directory=core.FONTS_DIR, check_dir=False), name="fonts"),

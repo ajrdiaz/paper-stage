@@ -19,7 +19,7 @@ import wave
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
-from .core import VideoRequest
+from .core import VideoRequest, topic_key
 
 SPEED = float(os.environ.get("PAPER_STAGE_DEMO_DELAY", "1.2"))
 
@@ -31,7 +31,7 @@ LINES = {
         "Dos pedacitos de papel nos lo van a explicar, paso a paso.",
         "¿Qué crees que pasa? ¡Dilo en voz alta!",
         "¡Exacto! Y ese era el secreto del principio.",
-        "Ahora ya sabes algo nuevo. ¿Qué tema quieren para mañana?",
+        "Ahora ya sabes algo nuevo. {cta}",
     ],
     "en": [
         "Did you know that {tema} hides an amazing secret?",
@@ -40,7 +40,7 @@ LINES = {
         "Two little paper friends will explain it, step by step.",
         "What do you think happens? Say it out loud!",
         "Exactly! And that was the secret from the start.",
-        "Now you know something new. What topic should we do tomorrow?",
+        "Now you know something new. {cta}",
     ],
 }
 TITLES = ["La idea", "¿Qué es?", "El detalle clave", "El corazón", "Mini-quiz", "La revelación", "De vuelta"]
@@ -179,7 +179,7 @@ async def run_demo(
 ) -> AsyncIterator[dict]:
     out = req.out_dir
     out.mkdir(parents=True, exist_ok=True)
-    lines = [line.format(tema=req.tema) for line in LINES[req.idioma]]
+    lines = [line.format(tema=req.tema, cta=req.cta) for line in LINES[req.idioma]]
     timeline = _timeline()
     duration = timeline[-1]["end"]
     words = _words(lines, timeline)
@@ -224,19 +224,22 @@ async def run_demo(
          "Animo el teatrito en stage.html con reloj determinista."),
         ("Bash", "Sintetizar música y efectos, mezclar a −14 LUFS",
          lambda: _music_box(out / "mix.wav", duration), None),
-        ("Bash", "Render con Playwright + ffmpeg → final.mp4", lambda: _fake_mp4(out, duration, req), None),
-        ("Write", "qa.md", lambda: _write(out / "qa.md",
-            "# QA (demo)\n\n- [x] Duración entre 60.0 y 65.0 s\n- [x] Subtítulos debajo del escenario\n"
+        ("Write", "qa_previo.md", lambda: _write(out / "qa_previo.md",
+            "# QA previo (demo)\n\n- [x] Escenas entre 60.0 y 65.0 s\n- [x] Subtítulos debajo del escenario\n"
             "- [ ] Voz real (el modo demo usa silencio)\n"), None),
+        ("Bash", "Render con Playwright + ffmpeg → final.mp4", lambda: _fake_mp4(out, duration, req), None),
         ("Write", "publish.json", lambda: _write(out / "publish.json", json.dumps({
             "idioma": req.idioma,
             "titulos": [f"¿Qué esconde {req.tema}?", f"{req.tema} en 60 segundos", "Lía te lo explica"],
+            "descripcion_corta": "Video de ejemplo del modo demostración.",
             "descripcion": "Video de ejemplo generado en modo demostración.",
-            "hashtags": ["#shorts", "#cienciaparaniños", "#teatritodepapel"],
+            "hashtags": ["#shorts", "#cienciaparaniños", "#ciencia", "#aprendejugando", "#teatritodepapel"],
             "texto_portada": title, "frame_portada_s": 1.5, "hecho_para_ninos": True,
             "serie": "Teatrito de Papel",
             "ideas_siguientes": ["Los volcanes", "Por qué el cielo es azul", "Cómo duermen los delfines"],
         }, ensure_ascii=False, indent=2)), None),
+        ("Write", "qa.md", lambda: _write(out / "qa.md",
+            "# QA final (demo)\n\n- [x] final.mp4 existe\n- [ ] Duración real (el modo demo hace un video corto)\n"), None),
     ]
     for tool, detail, action, note in plan:
         async for event in step(tool, detail, action, note):
@@ -265,3 +268,33 @@ def _fake_mp4(out: Path, duration: float, req: VideoRequest) -> None:
          "-c:a", "aac", "-shortest", str(out / "final.mp4")],
         capture_output=True, timeout=300,
     )
+
+
+IDEAS = {
+    "es": [
+        ("¿Por qué el mar es salado?", "Lía prueba el mar y pone cara de limón."),
+        ("¿Cómo respiran los peces?", "Un pez de papel le enseña sus branquias secretas."),
+        ("¿Por qué la Luna cambia de forma?", "La Luna juega al escondite con el Sol."),
+        ("¿De dónde sale el viento?", "Un globo se escapa y Lía lo persigue."),
+        ("¿Por qué los gatos ronronean?", "Un gato de papel con motor de juguete."),
+        ("¿Cómo se forma el arcoíris?", "Una gota de agua abre la caja de colores del sol."),
+        ("¿Por qué tenemos hipo?", "Lía no puede parar de saltar… ¡hip!"),
+        ("¿Cómo vuelan los aviones?", "Un avión de papel que no quiere caerse."),
+    ],
+    "en": [
+        ("Why is the sea salty?", "Lía tastes the sea and makes a lemon face."),
+        ("How do fish breathe?", "A paper fish shows its secret gills."),
+        ("Why does the Moon change shape?", "The Moon plays hide-and-seek with the Sun."),
+        ("Where does wind come from?", "A balloon escapes and Lía chases it."),
+        ("Why do cats purr?", "A paper cat with a toy engine inside."),
+        ("How does a rainbow form?", "A raindrop opens the Sun's box of colors."),
+    ],
+}
+
+
+async def suggest_demo(idioma: str, edad: str, pista: str, used: list[str], n: int) -> list[dict]:
+    """Sugerencias fijas para el modo demo: sin Claude y sin costo."""
+    await asyncio.sleep(min(SPEED, 0.6))
+    taken = {topic_key(t, idioma) for t in used}
+    fresh = [(t, g) for t, g in IDEAS[idioma] if topic_key(t, idioma) not in taken]
+    return [{"tema": t, "gancho": g} for t, g in fresh[:n]]

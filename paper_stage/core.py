@@ -30,6 +30,8 @@ DEFAULT_MODEL = "claude-opus-5-5"
 MODELS = ["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5"]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 LANGUAGES = ["es", "en"]
+# Frase final que Lía dice en cada video; se puede cambiar por video.
+DEFAULT_CTA = {"es": "¡Sígueme para aprender más!", "en": "Follow me to learn more!"}
 FORMATS = ["vertical", "horizontal"]
 ALLOWED_TOOLS = ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"]
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
@@ -42,6 +44,8 @@ AGENT_ENV = {
     "BASH_MAX_TIMEOUT_MS": str(2 * 60 * 60 * 1000),
 }
 DISALLOWED_TOOLS = ["ScheduleWakeup", "Monitor", "CronCreate", "RemoteTrigger"]
+# Sugerir temas es una respuesta corta sin herramientas: basta un modelo rápido.
+SUGGEST_MODEL = "claude-sonnet-5"
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 AGE_RE = re.compile(r"^\d{1,2}(-\d{1,2})?$")
@@ -50,12 +54,12 @@ KICKOFF = {
     "es": (
         "Produce el video completo sobre «{tema}» para niños de {edad} años, "
         "siguiendo el pipeline de principio a fin en output/{slug}/. "
-        "No te detengas hasta tener final.mp4 y el QA hecho."
+        "No te detengas hasta tener final.mp4 y los dos QA hechos."
     ),
     "en": (
         "Produce the full video about “{tema}” for kids aged {edad}, "
         "following the pipeline end to end in output/{slug}/. "
-        "Do not stop until final.mp4 exists and QA is done. "
+        "Do not stop until final.mp4 exists and both QA passes are done. "
         "(The system prompt is in Spanish; everything you produce must be in English.)"
     ),
 }
@@ -64,12 +68,12 @@ RESUME = {
     "es": (
         "La ejecución anterior se interrumpió. Revisa qué hay ya en output/{slug}/, "
         "reutiliza lo que esté bien y continúa el pipeline desde el primer paso incompleto "
-        "hasta tener final.mp4, qa.md y publish.json."
+        "hasta tener qa_previo.md, final.mp4, publish.json y qa.md."
     ),
     "en": (
         "The previous run was interrupted. Check what already exists in output/{slug}/, "
         "reuse what is good and continue the pipeline from the first incomplete step "
-        "until final.mp4, qa.md and publish.json exist."
+        "until qa_previo.md, final.mp4, publish.json and qa.md exist."
     ),
 }
 
@@ -85,6 +89,7 @@ class VideoRequest:
     effort: str = "high"
     max_turns: int = 400
     max_budget_usd: float | None = None
+    cta: str = ""
     extra: dict = field(default_factory=dict)
 
     def validate(self) -> None:
@@ -105,6 +110,9 @@ class VideoRequest:
             raise ValueError("max_turns debe estar entre 10 y 2000.")
         if self.max_budget_usd is not None and not 0.5 <= float(self.max_budget_usd) <= 1000:
             raise ValueError("El tope de gasto debe estar entre 0.5 y 1000 USD.")
+        self.cta = " ".join(self.cta.split()) or DEFAULT_CTA[self.idioma]
+        if len(self.cta) > 80:
+            raise ValueError("La frase final (CTA) debe tener 80 caracteres como máximo.")
         self.slug = slugify(self.slug or f"{self.tema}-{self.idioma}")
 
     @property
@@ -118,6 +126,7 @@ class VideoRequest:
             "EDAD": self.edad,
             "SLUG": self.slug,
             "FORMATO": self.formato,
+            "CTA": self.cta or DEFAULT_CTA[self.idioma],
         }
 
 
@@ -125,6 +134,53 @@ def slugify(text: str) -> str:
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     text = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
     return text[:60].rstrip("-") or "video"
+
+
+def topic_key(tema: str, idioma: str) -> str:
+    """Clave para detectar temas repetidos: sin tildes, mayúsculas ni signos, y por idioma
+    (la versión en el otro idioma de un video es otro video). Temas parecidos pero no
+    iguales tienen claves distintas."""
+    text = unicodedata.normalize("NFKD", tema).encode("ascii", "ignore").decode().lower()
+    return " ".join(re.findall(r"[a-z0-9]+", text)) + "|" + idioma
+
+
+SUGGEST_PROMPT = {
+    "es": "Propón {n} temas en español.",
+    "en": "Propón {n} temas en inglés (el campo «tema» en inglés; el «gancho», en español).",
+}
+
+
+async def suggest_topics(idioma: str, edad: str, pista: str, used: list[str], n: int) -> list[dict]:
+    """Pide a Claude n ideas de tema [{"tema", "gancho"}]. Quien llama descarta las repetidas."""
+    from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, TextBlock, query
+
+    lines = [
+        "Eres el guionista de «Teatrito de Papel»: videos de 60 segundos con recortes de papel en los "
+        f"que la niña Lía explica ciencia, naturaleza y curiosidades a niños de {edad} años.",
+        SUGGEST_PROMPT[idioma].format(n=n),
+        "Cada tema es una pregunta curiosa de 60 caracteres como máximo, que se pueda explicar y "
+        "animar en un minuto. Que sean variados entre sí (distintas áreas).",
+    ]
+    if pista:
+        lines.append(f"Deben tratar sobre: {pista}")
+    if used:
+        lines.append("Estos temas ya están hechos. Puedes proponer temas relacionados o parecidos, "
+                     "pero nunca uno igual:\n" + "\n".join(f"- {t}" for t in used))
+    lines.append('Responde solo con JSON, sin texto alrededor: [{"tema": "...", "gancho": "una frase corta (15 palabras como máximo) '
+                 'sobre por qué le engancha a un niño"}]')
+    options = ClaudeAgentOptions(model=SUGGEST_MODEL, tools=[], max_turns=1, setting_sources=[],
+                                 cwd=str(ROOT))
+    text = ""
+    async for message in query(prompt="\n\n".join(lines), options=options):
+        if isinstance(message, AssistantMessage):
+            text += "".join(b.text for b in message.content if isinstance(b, TextBlock))
+    match = re.search(r"\[.*\]", text, re.S)
+    try:
+        items = json.loads(match.group(0)) if match else []
+    except ValueError:
+        items = []
+    return [{"tema": " ".join(str(i["tema"]).split()), "gancho": str(i.get("gancho") or "").strip()}
+            for i in items if isinstance(i, dict) and str(i.get("tema") or "").strip()]
 
 
 def render_prompt(variables: dict[str, str]) -> str:

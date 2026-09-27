@@ -5,8 +5,15 @@
     "En la Luna el cielo es negro… ¿y aquí por qué es azul?",
     "El secreto del cielo azul (y del atardecer naranja)"
   ],
+  "descripcion_corta": "¿Por qué el cielo es azul… y el atardecer, naranja? Lía lo descubre con papel y crayones.",
   "descripcion": "Lía descubre por qué el cielo es azul: la luz del sol trae todos los colores y las diminutas moléculas del aire hacen rebotar sobre todo la luz azul por todo el cielo. ¡Y al atardecer, el azul se pierde en el camino y llegan los naranjas!\n\nDato extra para padres y docentes: a esto se le llama dispersión de Rayleigh. El azul se dispersa unas 5 a 6 veces más que el rojo. ¿Y por qué no violeta? El Sol emite menos violeta y nuestros ojos son más sensibles al azul. En Marte pasa al revés: ¡sus atardeceres son azulados!\n\nFuentes: NASA Space Place, «Why Is the Sky Blue?» (spaceplace.nasa.gov/blue-sky); Met Office, «Why is the sky blue?»; Encyclopaedia Britannica, «Rayleigh scattering»; NASA/JPL, «Blue Sunset on Mars».",
-  "hashtags": ["#shorts", "#cienciaparaniños", "#cieloazul", "#experimentosparaniños", "#aprendejugando", "#cienciaencasa", "#teatritodepapel", "#curiosidades"],
+  "hashtags": [
+    "#cienciaparaniños",
+    "#cieloazul",
+    "#aprendejugando",
+    "#curiosidades",
+    "#teatritodepapel"
+  ],
   "texto_portada": "¿Por qué es azul?",
   "frame_portada_s": 3.0,
   "hecho_para_ninos": true,

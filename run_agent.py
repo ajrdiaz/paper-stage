@@ -16,7 +16,7 @@ import asyncio
 import sys
 import time
 
-from paper_stage import core
+from paper_stage import core, jobs, library
 
 
 def print_check() -> bool:
@@ -48,8 +48,11 @@ async def run(req: core.VideoRequest, resume: str | None) -> int:
             print(f"\n{stamp} Fin ({event['subtype']}): {event['turns']} turnos, costo {cost}.")
             ok = event["ok"]
     final = req.out_dir / "final.mp4"
+    cover = library.cover(req.out_dir) if ok and final.exists() else None
     print(f"Log: {(req.out_dir / 'agent_log.jsonl').relative_to(core.ROOT)}")
     print(f"Video: {final.relative_to(core.ROOT) if final.exists() else 'NO se generó final.mp4'}")
+    if cover:
+        print(f"Portada: {cover.relative_to(core.ROOT)}")
     return 0 if ok and final.exists() else 1
 
 
@@ -59,6 +62,8 @@ def main() -> int:
     parser.add_argument("--edad", default="6-9", help="Rango de edad (por defecto: 6-9).")
     parser.add_argument("--idioma", choices=core.LANGUAGES, default="es")
     parser.add_argument("--formato", choices=core.FORMATS, default="vertical")
+    parser.add_argument("--cta", default="", help="Frase final que dice Lía "
+                        f"(por defecto: «{core.DEFAULT_CTA['es']}» / «{core.DEFAULT_CTA['en']}»).")
     parser.add_argument("--slug", default="", help="Carpeta de salida (por defecto: tema + idioma).")
     parser.add_argument("--model", default=core.DEFAULT_MODEL, help=f"Modelo (por defecto: {core.DEFAULT_MODEL}).")
     parser.add_argument("--effort", choices=core.EFFORTS, default="high")
@@ -76,7 +81,7 @@ def main() -> int:
 
     req = core.VideoRequest(
         tema=args.tema, edad=args.edad, idioma=args.idioma, formato=args.formato,
-        slug=args.slug, model=args.model, effort=args.effort,
+        slug=args.slug, cta=args.cta, model=args.model, effort=args.effort,
         max_turns=args.max_turns, max_budget_usd=args.max_budget_usd,
     )
     try:
@@ -87,6 +92,9 @@ def main() -> int:
     if args.dry_run:
         print(prompt)
         return 0
+    if not args.resume and jobs.JobManager(core.DATA_DIR).is_used(req.tema, req.idioma):
+        parser.error(f"ya hay un video sobre «{req.tema}» en este idioma; los temas no se repiten "
+                     "(usa --resume para continuar uno interrumpido).")
 
     print(f"Tema: {req.tema} · {req.edad} años · {req.idioma} · {req.formato} → output/{req.slug}/")
     return asyncio.run(run(req, args.resume))

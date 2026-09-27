@@ -15,6 +15,7 @@ const STATUS = {
 const ACTIVE = new Set(["queued", "running"]);
 const LANG = { es: "Español", en: "English" };
 const PREFS_KEY = "paper-stage:prefs";
+const MAX_HASHTAGS = 5; // límite de TikTok
 
 let CONFIG = null;
 let cleanup = [];          // funciones a ejecutar al cambiar de vista
@@ -244,10 +245,18 @@ function studioForm(prefill = {}) {
     <div class="row"><h2>Nuevo video</h2><span class="spacer"></span>
       <label class="row small muted"><input type="checkbox" id="batch-toggle"> Varios temas</label></div>
     <div class="field" id="single-field">
-      <label for="tema">Tema</label>
+      <div class="row"><label for="tema">Tema</label><span class="spacer"></span>
+        <button type="button" class="btn small" id="suggest-open" aria-expanded="false" aria-controls="suggest-panel">Sugerir 3 temas</button></div>
       <input id="tema" name="tema" type="text" class="tema-input" maxlength="200" autocomplete="off"
         placeholder="Ej.: ¿Por qué el cielo es azul?" value="${esc(prefill.tema || "")}">
-      <span class="hint">Escríbelo en el idioma del video. El agente investiga, escribe el guion, anima y renderiza 60–65 s.</span>
+      <span class="hint">Escríbelo en el idioma del video. El agente investiga, escribe el guion, anima y renderiza 60–65 s. Los temas no se repiten.</span>
+      <div id="suggest-panel" class="suggest-panel hidden">
+        <div class="row">
+          <input id="pista" type="text" maxlength="120" autocomplete="off" aria-label="Sobre qué (opcional)" placeholder="Sobre qué (opcional): animales, espacio…">
+          <button type="button" class="btn small" id="suggest-more">Otras 3</button>
+        </div>
+        <div id="suggest-list" class="suggest-list" role="radiogroup" aria-label="Temas sugeridos" aria-live="polite"></div>
+      </div>
     </div>
     <div class="field hidden" id="batch-field">
       <label for="temas">Temas (uno por línea)</label>
@@ -272,6 +281,12 @@ function studioForm(prefill = {}) {
     <div class="field">
       <label for="edad">Edad del público</label>
       <select id="edad" name="edad">${ages.map(a => `<option value="${a}" ${prefs.edad === a ? "selected" : ""}>${a} años</option>`).join("")}</select>
+    </div>
+    <div class="field">
+      <label for="cta">Frase final (CTA)</label>
+      <input id="cta" name="cta" type="text" maxlength="80" autocomplete="off"
+        placeholder="${esc(CONFIG.default_cta[prefs.idioma] || "")}" value="${esc(prefs[`cta_${prefs.idioma}`] || "")}">
+      <span class="hint">Lía la dice al final de cada video. Déjala vacía para usar la de siempre. Se recuerda por idioma.</span>
     </div>
     <details class="advanced">
       <summary>Opciones del agente</summary>
@@ -302,8 +317,9 @@ function readForm(form) {
   const data = Object.fromEntries(new FormData(form).entries());
   const prefs = { edad: data.edad, idioma: data.idioma, formato: data.formato, model: data.model, effort: data.effort,
                   max_turns: data.max_turns, max_budget_usd: data.max_budget_usd || null };
-  savePrefs(prefs);
-  return { ...prefs, max_turns: Number(data.max_turns) || 400, max_budget_usd: data.max_budget_usd ? Number(data.max_budget_usd) : null };
+  const cta = (data.cta || "").trim();
+  savePrefs({ ...loadPrefs(), ...prefs, [`cta_${data.idioma}`]: cta });
+  return { ...prefs, cta, max_turns: Number(data.max_turns) || 400, max_budget_usd: data.max_budget_usd ? Number(data.max_budget_usd) : null };
 }
 
 async function renderStudio(params) {
@@ -329,6 +345,49 @@ async function renderStudio(params) {
     $("#single-field").classList.toggle("hidden", batch.checked);
     $("#batch-field").classList.toggle("hidden", !batch.checked);
     $("#submit").textContent = batch.checked ? "Poner en cola" : "Producir video";
+  });
+
+  // Sugerencias: 3 temas nuevos cada vez; los ya mostrados no vuelven a salir.
+  let shown = [];
+  const list = $("#suggest-list");
+  async function suggest() {
+    const { idioma, edad } = Object.fromEntries(new FormData(form).entries());
+    list.innerHTML = `<p class="small muted">Lía está pensando temas…</p>`;
+    $("#suggest-more").disabled = true;
+    try {
+      const res = await api("/api/suggest", { method: "POST", body: { idioma, edad, pista: $("#pista").value, evitar: shown } });
+      shown.push(...res.temas.map(t => t.tema));
+      list.innerHTML = res.temas.map(t => `
+        <button type="button" class="suggestion" role="radio" aria-checked="false" data-tema="${esc(t.tema)}">
+          <strong>${esc(t.tema)}</strong>${t.gancho ? `<span class="small muted">${esc(t.gancho)}</span>` : ""}</button>`).join("");
+    } catch (err) {
+      list.innerHTML = `<p class="small" style="color:var(--warn)">${esc(err.message)}</p>`;
+    } finally { $("#suggest-more").disabled = false; }
+  }
+  $("#suggest-open").addEventListener("click", () => {
+    const panel = $("#suggest-panel");
+    const open = panel.classList.toggle("hidden") === false;
+    $("#suggest-open").setAttribute("aria-expanded", open);
+    if (open && !list.children.length) suggest();
+  });
+  $("#suggest-more").addEventListener("click", suggest);
+  $("#pista").addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); suggest(); } });
+  // La frase final se recuerda por idioma: al cambiarlo, guarda la actual y trae la del otro.
+  let ctaLang = new FormData(form).get("idioma");
+  $$("input[name=idioma]", form).forEach(r => r.addEventListener("change", () => {
+    savePrefs({ ...loadPrefs(), [`cta_${ctaLang}`]: $("#cta").value.trim() });
+    ctaLang = r.value;
+    $("#cta").value = loadPrefs()[`cta_${ctaLang}`] || "";
+    $("#cta").placeholder = CONFIG.default_cta[ctaLang] || "";
+  }));
+  // Al cambiar de idioma, las sugerencias anteriores ya no sirven.
+  $$("input[name=idioma]", form).forEach(r => r.addEventListener("change", () => { shown = []; list.innerHTML = ""; if (!$("#suggest-panel").classList.contains("hidden")) suggest(); }));
+  list.addEventListener("click", ev => {
+    const pick = ev.target.closest(".suggestion");
+    if (!pick) return;
+    $$(".suggestion", list).forEach(b => b.setAttribute("aria-checked", b === pick));
+    $("#tema").value = pick.dataset.tema;
+    $("#form-error").textContent = "";
   });
 
   $("#preview-prompt").addEventListener("click", async () => {
@@ -501,6 +560,7 @@ async function renderLibrary() {
             ${v.idioma ? `<span class="pill lang">${esc(v.idioma.toUpperCase())}</span>` : ""}
             ${v.has_video ? `<span class="pill done">Video listo</span>` : `<span class="pill">${v.steps_done}/${v.steps_total} pasos</span>`}
             ${v.qa ? `<span class="pill plain ${v.qa.failed ? "failed" : "done"}">QA ${v.qa.passed}/${v.qa.total}</span>` : ""}
+            ${v.verify && !v.verify.ok ? `<span class="pill plain failed" title="La revisión automática encontró problemas">Revisar</span>` : ""}
           </div></div>
       </a>`).join("")
       : `<div class="card empty" style="grid-column:1/-1"><span class="big">${filter ? "Sin resultados" : "Aún no hay videos"}</span>${filter ? "" : `<a href="#/">Produce el primero</a>`}</div>`;
@@ -586,10 +646,10 @@ async function renderVideo(slug) {
   const other = (v.idioma || req.idioma) === "es" ? "en" : "es";
 
   const tabs = [];
-  if (publish.titulos || publish.descripcion) tabs.push(["publish", "Publicación"]);
+  if (publish.titulos || publish.descripcion || publish.descripcion_corta) tabs.push(["publish", "Publicación"]);
   if (script.escenas) tabs.push(["script", "Guion"]);
   if (v.texts["research.md"]) tabs.push(["research", "Investigación"]);
-  if (v.texts["qa.md"]) tabs.push(["qa", "QA"]);
+  if (v.texts["qa.md"] || v.texts["qa_previo.md"] || v.verify) tabs.push(["qa", "QA"]);
   if (v.texts["bible.md"]) tabs.push(["bible", "Biblia visual"]);
   tabs.push(["files", "Archivos"]);
   if (v.jobs.length) tabs.push(["history", "Historial"]);
@@ -605,6 +665,8 @@ async function renderVideo(slug) {
         <button class="btn danger" id="delete-video" ${running ? "disabled" : ""}>Borrar</button>
       </div>
     </div>
+    ${v.verify && !v.verify.ok ? `<div class="banner warn"><div><strong>La revisión automática encontró problemas:</strong>
+      ${esc(v.verify.checks.filter(c => !c.ok).map(c => `${c.label} (${c.detail})`).join("; "))}. Detalles en la pestaña QA.</div></div>` : ""}
     <div class="video-layout">
       <div class="stack">
         ${v.has_video && v.has_stage ? `<div class="segmented" role="tablist" aria-label="Reproductor">
@@ -634,9 +696,14 @@ async function renderVideo(slug) {
     publish: () => `
       <div class="stack">
         ${(publish.titulos || []).length ? `<h3>Títulos</h3>${publish.titulos.map(t => copyRow(t)).join("")}` : ""}
-        ${publish.descripcion ? `<h3>Descripción</h3>${copyRow(publish.descripcion)}` : ""}
-        ${(publish.hashtags || []).length ? `<h3>Hashtags</h3>${copyRow(publish.hashtags.join(" "))}` : ""}
-        <p class="small muted">${publish.texto_portada ? `Portada: “${esc(publish.texto_portada)}” en ${esc(publish.frame_portada_s)} s · ` : ""}${publish.hecho_para_ninos ? "Marcar como «Hecho para niños»" : ""}</p>
+        ${publish.descripcion_corta ? `<h3>Descripción corta <span class="small muted">TikTok y Reels</span></h3>${copyRow(publish.descripcion_corta)}` : ""}
+        ${publish.descripcion ? `<h3>Descripción${publish.descripcion_corta ? ` <span class="small muted">YouTube</span>` : ""}</h3>${copyRow(publish.descripcion)}` : ""}
+        ${(publish.hashtags || []).length ? `<h3>Hashtags</h3>${copyRow(publish.hashtags.slice(0, MAX_HASHTAGS).join(" "))}` : ""}
+        ${v.has_video ? `<h3>Portada</h3>
+          <div class="cover-row"><img class="cover" src="/cover/${esc(v.slug)}.jpg" alt="Portada del video" loading="lazy" onerror="this.parentElement.remove()">
+            <div class="stack"><a class="btn small" href="/cover/${esc(v.slug)}.jpg" download="${esc(v.slug)}-portada.jpg">Descargar portada</a>
+            ${publish.texto_portada ? `<p class="small muted">“${esc(publish.texto_portada)}” sobre el fotograma de ${esc(publish.frame_portada_s)} s</p>` : ""}</div></div>` : ""}
+        ${publish.hecho_para_ninos ? `<p class="small muted">Marcar como «Hecho para niños»</p>` : ""}
         ${(publish.ideas_siguientes || []).length ? `<h3>Ideas para los siguientes videos</h3><div class="chips">${publish.ideas_siguientes.map(i =>
           `<a class="chip" href="#/?tema=${encodeURIComponent(i)}&idioma=${esc(v.idioma || "es")}&formato=${esc(req.formato)}&edad=${encodeURIComponent(req.edad)}">+ ${esc(i)}</a>`).join("")}</div>` : ""}
       </div>`,
@@ -652,8 +719,14 @@ async function renderVideo(slug) {
         </div></div>`).join("")}`,
     research: () => markdown(v.texts["research.md"]),
     bible: () => markdown(v.texts["bible.md"]),
-    qa: () => `${v.qa ? `<div class="qa-score">${v.qa.failed ? `<span class="pill failed">${v.qa.failed} sin cumplir</span>` : `<span class="pill done">Todo cumple</span>`}
-      <span class="small muted">${v.qa.passed} de ${v.qa.total} puntos</span></div>` : ""}${markdown(v.texts["qa.md"])}`,
+    qa: () => `
+      ${v.verify ? `<h3>Revisión automática de la app</h3>
+        <p class="small muted">Medida por la app sobre final.mp4 y publish.json, sin fiarse del informe del agente.</p>
+        <ul class="checks">${v.verify.checks.map(c => `<li class="${c.ok ? "ok" : "bad"}"><span aria-hidden="true">${c.ok ? "✓" : "✗"}</span>
+          <span>${esc(c.label)}</span><span class="small muted">${esc(c.detail)}</span></li>`).join("")}</ul>` : ""}
+      ${v.texts["qa.md"] ? `<h3>QA final del agente</h3>${v.qa ? `<div class="qa-score">${v.qa.failed ? `<span class="pill failed">${v.qa.failed} sin cumplir</span>` : `<span class="pill done">Todo cumple</span>`}
+        <span class="small muted">${v.qa.passed} de ${v.qa.total} puntos</span></div>` : ""}${markdown(v.texts["qa.md"])}` : ""}
+      ${v.texts["qa_previo.md"] ? `<details class="advanced"><summary>QA previo del agente (antes del render)</summary>${markdown(v.texts["qa_previo.md"])}</details>` : ""}`,
     files: () => `<table class="files"><tbody>${v.files.map(f => `
       <tr><td><a href="/files/${esc(v.slug)}/${f.name.split("/").map(encodeURIComponent).join("/")}" target="_blank" rel="noopener">${esc(f.name)}</a></td><td>${fmtSize(f.size)}</td></tr>`).join("")}</tbody></table>`,
     history: () => `<div class="job-list">${v.jobs.map(j => jobRow({ ...j, steps_done: v.steps_done, steps_total: v.steps_total })).join("")}</div>`,

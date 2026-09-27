@@ -25,9 +25,10 @@ Todo lo visible y audible va en `{{IDIOMA}}`. Si generas la versión `en` de un 
 6. **Datos de sincronía**: `faster-whisper` (modelo `small`, local) → `words.json` para los subtítulos; envolvente de amplitud de la voz a 24 fps → `mouth.json` (0 = boca cerrada, 1 = "o" abierta) para el lip-sync.
 7. **Animación**: una sola página `stage.html` autocontenida (HTML + SVG/Canvas + JS, sin CDNs) con un reloj determinista (§7).
 8. **Audio**: música y efectos generados por código (§8) → `music.wav` y `sfx.wav`. Mezcla final → `mix.wav` (−14 LUFS).
-9. **Render**: Playwright + Chromium headless captura `stage.html` frame a frame → ffmpeg → `final.mp4`.
-10. **QA** (§10) → `qa.md`. Si algo falla, corrige y vuelve a renderizar.
+9. **QA previo** (§10) → `qa_previo.md`: todo lo que se puede comprobar sin el video final (tiempos, sincronía, contenido y fotogramas de muestra de `stage.html`). Corrige lo que falle **antes** de renderizar: un error aquí cuesta minutos; después del render, un render entero.
+10. **Render**: Playwright + Chromium headless captura `stage.html` frame a frame → ffmpeg → `final.mp4`.
 11. **Publicación** → `publish.json` (§11).
+12. **QA final** (§10) → `qa.md`: lo técnico de `final.mp4`, una revisión visual rápida y `publish.json`. Si algo falla, corrige solo lo necesario (volver a codificar o a mezclar no exige volver a capturar los frames).
 
 ## 2. Estructura viral en 7 escenas (60–65 s)
 
@@ -41,7 +42,7 @@ Mantiene las 7 escenas y el cierre circular del video de referencia (se empieza 
 | 4 | 26–37 s | **El corazón del concepto**, con personajes de papel (p. ej. dos confetis que se vuelven personajes coral y teal) | La explicación central, personificada. Es la escena más larga. |
 | 5 | 37–46 s | **Mini-quiz** | "¿Qué crees que pasa? ¡Dilo en voz alta!", con 2 opciones dibujadas en crayón y 1.5 s de pausa con un tic-tac. Aumenta los rewatches y los comentarios. |
 | 6 | 46–56 s | **El destello final / la revelación** | Cierra el bucle abierto de la escena 2. Clímax visual y musical (cascada de campanitas). |
-| 7 | 56–63 s | **De vuelta al escenario** — el cielo se enrolla como pergamino y vuelve el escenario amarillo | Recap de una frase + la última línea rima o conecta con la primera, para que el loop se sienta continuo. CTA suave dirigido al adulto: "¿Qué tema quieren para mañana? Escríbanlo en los comentarios." |
+| 7 | 56–63 s | **De vuelta al escenario** — el cielo se enrolla como pergamino y vuelve el escenario amarillo | Recap de una frase + la última línea rima o conecta con la primera, para que el loop se sienta continuo. Cierra con el CTA exacto, dicho por Lía y sin cambiarle una palabra: "{{CTA}}" |
 
 **Reglas de retención:**
 - Frases cortas (≤14 palabras), con pausas de asombro, no de relleno.
@@ -53,7 +54,7 @@ Mantiene las 7 escenas y el cierre circular del video de referencia (se empieza 
 **Reglas de contenido infantil (no negociables):**
 - Ciencia correcta, simplificada sin mentir. Si un tema tiene matices (como la radiación de Hawking), usa "los científicos creen…" o "una forma sencilla de imaginarlo es…".
 - Nada de miedo, violencia, burlas ni consumo. El gancho despierta curiosidad; nunca es clickbait falso.
-- El CTA se dirige a padres y docentes, nunca pide datos a los niños. Marca el video como "Hecho para niños".
+- El CTA es la frase fija "{{CTA}}": no le pidas a los niños comentarios ni datos. Marca el video como "Hecho para niños".
 - Solo personajes originales. Nada de personajes, marcas ni música con copyright.
 
 ## 3. Biblia visual (`bible.md`)
@@ -127,7 +128,7 @@ Siete escenas con título, rango de tiempo, descripción visual, `VO:` (la líne
 - **Lip-sync:** la boca de Lía interpola entre cerrada, "o" pequeña y "o" grande según `mouth.json` (incrustado en el HTML).
 - **Subtítulos karaoke** desde `words.json`, en la franja de abajo: 2 líneas como máximo, fuente redondeada de 58–64 px, crema sobre marino, con la palabra activa en amarillo mostaza y un pequeño rebote.
 - Los tiempos de cada escena salen de `timeline.json` (generado desde las duraciones reales del audio), incrustado en el HTML.
-- Antes de renderizar, abre la página en Playwright, captura frames de muestra en 0.5 s, 15 s, 30 s, 45 s y 60 s, y **míralos** (Read) para comprobar el estilo.
+- Mientras la construyes, captura frames de muestra con Playwright y **míralos** (Read) para comprobar el estilo; la revisión completa va en el QA previo (§10).
 
 **Render:**
 ```python
@@ -156,19 +157,29 @@ Igual que en el video de referencia, donde la música y los efectos se crean en 
 
 Antes de escribir el guion, comprueba que `{{TEMA}}` sea apropiado para `{{EDAD}}` años. Si el tema es sensible (muerte, enfermedad, desastres), trátalo con calma y sin detalles gráficos, o propón un enfoque alternativo en `qa.md` y detente.
 
-## 10. QA (obligatorio) → `qa.md`
+## 10. QA (obligatorio), en dos pasadas
 
-- [ ] Duración entre 60.0 y 65.0 s (`ffprobe`).
-- [ ] Resolución correcta, 24 fps, H.264 yuv420p, AAC 48 kHz, −14 LUFS ±1.
-- [ ] La voz empieza en ≤0.3 s y hay movimiento en el frame 1.
-- [ ] Ninguna línea de voz se pasa del tiempo de su escena.
-- [ ] Extrae 1 frame cada 3 s (`ffmpeg -vf fps=1/3`) y **míralos todos**: estilo de papel consistente, Lía siempre igual, nada fuera de la zona segura, subtítulos legibles y sin cortar, sin frames vacíos.
-- [ ] Lip-sync: la boca se mueve solo cuando hay voz.
-- [ ] Subtítulos sincronizados (desfase < 100 ms en 3 puntos) y con la ortografía correcta en `{{IDIOMA}}`.
+Marca cada punto con `[x]` o `[ ]` y anota la medida real. Un punto sin cumplir se corrige y se vuelve a comprobar; si de verdad no tiene arreglo, déjalo en `[ ]` y explica por qué.
+
+### QA previo → `qa_previo.md` (antes del render)
+- [ ] La suma de escenas de `timeline.json` da entre 60.0 y 65.0 s.
+- [ ] La voz empieza en ≤0.3 s (`voice.wav`) y ninguna línea se pasa del tiempo de su escena.
+- [ ] Lip-sync: en `mouth.json`, la boca se mueve solo cuando hay voz.
+- [ ] Subtítulos: `faster-whisper` sin prompt sobre `voice.wav` coincide con `words.json` (desfase < 100 ms en 3 puntos) y la ortografía es correcta en `{{IDIOMA}}`.
+- [ ] `mix.wav` a −14 LUFS ±1.
+- [ ] Captura `stage.html` con `renderAt` cada 3 s, más el primer y el último frame, y **míralos todos**: estilo de papel consistente, Lía siempre igual, nada fuera de la zona segura, subtítulos legibles y sin cortar, sin frames vacíos, movimiento en el frame 1, y el primero y el último se parecen (loop).
 - [ ] Cada dato del guion está respaldado en `research.md`.
 - [ ] El bucle abierto de la escena 2 se cierra en la escena 6.
-- [ ] El primer y el último frame se parecen (loop).
+- [ ] Lía cierra con el CTA exacto: "{{CTA}}".
 - [ ] Todo el texto y el audio están en `{{IDIOMA}}`.
+
+### QA final → `qa.md` (después del render y de `publish.json`)
+- [ ] Duración entre 60.0 y 65.0 s (`ffprobe`), y audio y video duran lo mismo (±0.1 s).
+- [ ] Resolución correcta, 24 fps, H.264 yuv420p, AAC 48 kHz, −14 LUFS ±1.
+- [ ] Extrae de `final.mp4` un frame a mitad de cada escena y **míralos**: se ven como en el QA previo, sin artefactos de compresión ni frames negros.
+- [ ] `publish.json`: exactamente 5 hashtags, `descripcion_corta` de 150 caracteres como máximo y títulos de 60 como máximo.
+
+Al terminar, la app vuelve a medir por su cuenta lo técnico y `publish.json`, y avisa si algo no cumple aunque `qa.md` diga lo contrario.
 
 ## 11. `publish.json`
 
@@ -176,9 +187,10 @@ Antes de escribir el guion, comprueba que `{{TEMA}}` sea apropiado para `{{EDAD}
 {
   "idioma": "es",
   "titulos": ["3 opciones ≤60 caracteres: curiosidad + tema, sin clickbait falso"],
-  "descripcion": "2–3 líneas + un dato extra para padres y docentes + fuentes",
-  "hashtags": ["#shorts", "#cienciaparaniños", "…5–8 en el idioma"],
-  "texto_portada": "3–5 palabras en crayón",
+  "descripcion_corta": "Para TikTok y Reels: ≤150 caracteres, una pregunta o frase que enganche desde la primera palabra, sin hashtags ni fuentes",
+  "descripcion": "Para YouTube: 2–3 líneas + un dato extra para padres y docentes + fuentes",
+  "hashtags": ["#cienciaparaniños", "#teatritodepapel", "…exactamente 5 en el idioma (TikTok no admite más)"],
+  "texto_portada": "3–5 palabras, 1 línea: el gancho del video",
   "frame_portada_s": 1.5,
   "hecho_para_ninos": true,
   "serie": "Teatrito de Papel",
@@ -186,6 +198,8 @@ Antes de escribir el guion, comprueba que `{{TEMA}}` sea apropiado para `{{EDAD}
 }
 ```
 
+La app genera `portada.jpg` a tamaño completo con estos dos campos: dibuja `stage.html` en `frame_portada_s`, oculta los subtítulos y escribe `texto_portada` en grande en su franja. Por eso los subtítulos deben ir dentro de un elemento con `id="subs"`, y `frame_portada_s` debe caer en un momento con la escena completa, Lía visible y el título ya dibujado.
+
 ## 12. Entrega
 
-Deja en `output/{{SLUG}}/`: `final.mp4`, `stage.html`, `bible.md`, `script.json`, `research.md`, `words.json`, `subtitles.srt`, `publish.json` y `qa.md`. Borra la carpeta `frames/` al terminar. Responde con un resumen de 3 líneas: duración final, gancho usado y cualquier punto del QA sin cumplir.
+Deja en `output/{{SLUG}}/`: `final.mp4`, `stage.html`, `bible.md`, `script.json`, `research.md`, `words.json`, `subtitles.srt`, `publish.json`, `qa_previo.md` y `qa.md`. Borra la carpeta `frames/` al terminar. Responde con un resumen de 3 líneas: duración final, gancho usado y cualquier punto del QA sin cumplir.

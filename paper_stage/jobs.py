@@ -60,6 +60,11 @@ class JobStore:
         row = self.db.execute("SELECT * FROM jobs WHERE id = ?", [job_id]).fetchone()
         return self._row(row) if row else None
 
+    def requests(self) -> list[tuple[str, dict]]:
+        """(slug, petición) de todos los trabajos, del más antiguo al más reciente."""
+        rows = self.db.execute("SELECT slug, request FROM jobs ORDER BY created_at")
+        return [(slug, json.loads(request)) for slug, request in rows]
+
     def list(self, limit: int = 200) -> list[dict]:
         rows = self.db.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", [limit])
         return [self._row(r) for r in rows]
@@ -125,8 +130,33 @@ class JobManager:
 
     # ------------------------------------------------------------------ API pública
 
+    def used_topics(self, idioma: str | None = None) -> list[str]:
+        """Temas ya producidos o en cola: los de los trabajos y los de output/ hechos desde
+        la terminal (de estos solo se conoce el título)."""
+        topics, slugs = [], set()
+        for slug, req in self.store.requests():
+            slugs.add(slug)
+            if idioma is None or req.get("idioma") == idioma:
+                topics.append(req["tema"])
+        for video in library.list_videos():
+            if video["slug"] not in slugs and (idioma is None or video.get("idioma") in (None, idioma)):
+                topics.append(video["title"])
+        return list(dict.fromkeys(topics))
+
+    def is_used(self, tema: str, idioma: str) -> bool:
+        key = core.topic_key(tema, idioma)
+        requests = self.store.requests()
+        if any(core.topic_key(req["tema"], req.get("idioma", "es")) == key for _, req in requests):
+            return True
+        # Hecho desde la terminal: su carpeta es el slug del tema.
+        slug = core.slugify(f"{tema}-{idioma}")
+        return slug not in {s for s, _ in requests} and (core.OUTPUT_DIR / slug / "script.json").exists()
+
     def create(self, req: core.VideoRequest) -> dict:
         req.validate()
+        if self.is_used(req.tema, req.idioma):
+            raise ValueError(f"Ya hay un video sobre «{req.tema}» en este idioma. "
+                             "Los temas no se repiten: elige uno distinto.")
         req.slug = self._unique_slug(req.slug)
         job_id = uuid.uuid4().hex[:10]
         self.store.insert({
@@ -333,7 +363,13 @@ class JobManager:
 
         has_video = (req.out_dir / "final.mp4").exists()
         if result and result.get("ok") and has_video:
+            await asyncio.to_thread(library.cover, req.out_dir)
             library.poster(req.out_dir)
+            check = await asyncio.to_thread(library.verify, req.out_dir)
+            if check and not check["ok"]:
+                failed = [f"{c['label']} ({c['detail']})" for c in check["checks"] if not c["ok"]]
+                self.emit(job_id, {"kind": "text",
+                                   "text": "Revisión automática de la app, no cumple: " + "; ".join(failed)})
             self._set_status(job_id, "done", finished_at=time.time())
         else:
             if not result:
