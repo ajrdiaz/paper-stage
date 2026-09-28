@@ -2,12 +2,6 @@
 __pycache__/
 models/
 assets/fonts/*.ttf
-output/*/frames/
-output/*/audio/
-output/*/*.wav
-output/*/agent_log.jsonl
 data/
-output/*/poster.jpg
-# Capturas sueltas del QA (las hojas qa_*/sheet* ya las resumen)
-output/*/snaps/t*.png
-output/*/snaps/final/
+# Videos generados por el agente: viven solo en disco (la app los lee de ahí)
+output/

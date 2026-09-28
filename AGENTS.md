@@ -60,7 +60,7 @@ Variables de entorno útiles: `PAPER_STAGE_OUTPUT`, `PAPER_STAGE_DATA` (redirige
 - **Cambios de guion o de voz** obligan a rehacer TTS, `timeline.json`, `words.json`, `mouth.json`, subtítulos y el render. Avisa del costo antes de hacerlo.
 - Antes de sobrescribir `final.mp4`, `mix.wav` o `music.wav`, guarda una copia. Anota cada corrección en `qa.md`.
 - `verify.json` es la caché de la revisión automática de la app. Se invalida sola cuando cambia la fecha de modificación de sus archivos fuente; no la edites a mano.
-- `.gitignore` excluye los WAV, `audio/`, `frames/`, `agent_log.jsonl`, `poster.jpg` y `data/`: no los añadas al repositorio.
+- `output/` y `data/` están en `.gitignore`: los videos y la base de datos de trabajos viven solo en disco. No los añadas al repositorio (ni con `git add -f`).
 
 ## Estilo de código
 
