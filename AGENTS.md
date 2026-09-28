@@ -36,18 +36,20 @@ Usa siempre `.venv/bin/python`, porque el `python3` del sistema no tiene Kokoro,
 | `paper_stage/core.py` | `Character` (personaje; `LIA` es el original), `VOICES`, `VideoRequest` y su validación, relleno del prompt, `run_agent()` (opciones del SDK, herramientas permitidas y entorno), sugerencia de temas y de personajes, `slugify`/`topic_key`. |
 | `paper_stage/jobs.py` | `JobStore` y `CharacterStore` (SQLite en `data/`) y `JobManager` (`prepare()` copia el personaje en la petición): cola, concurrencia, cancelar, reanudar y eventos en vivo (SSE). |
 | `paper_stage/library.py` | Lectura de `output/`: `STEPS` (paso → archivos que lo marcan como hecho), revisión automática de `final.mp4` (`verify`), portada y póster. |
+| `paper_stage/publishing.py` | Publicar en TikTok vía Buffer (API GraphQL) con el video alojado en una carpeta de Google Drive para escritorio compartida con enlace: configuración, copia, espera de sincronización, comprobación del enlace público, `createPost` e historial (tablas `settings` y `publications`). |
 | `paper_stage/web.py` | Servidor Starlette y API; `TokenAuth` si hay `PAPER_STAGE_TOKEN`. |
 | `paper_stage/demo.py` | Agente simulado que escribe un video falso completo (para `--demo` y las pruebas). |
 | `run_agent.py` | CLI. |
 | `tests/test_app.py` | Pruebas de extremo a extremo con el agente demo y directorios temporales. |
 
-Variables de entorno útiles: `PAPER_STAGE_OUTPUT`, `PAPER_STAGE_DATA` (redirigen `output/` y `data/`; las pruebas las usan), `PAPER_STAGE_DEMO=1`, `PAPER_STAGE_DEMO_DELAY`, `PAPER_STAGE_CONCURRENCY` y `PAPER_STAGE_TOKEN`.
+Variables de entorno útiles: `PAPER_STAGE_OUTPUT`, `PAPER_STAGE_DATA` (redirigen `output/` y `data/`; las pruebas las usan), `PAPER_STAGE_DEMO=1`, `PAPER_STAGE_DEMO_DELAY`, `PAPER_STAGE_CONCURRENCY`, `PAPER_STAGE_TOKEN` y `PAPER_STAGE_BUFFER_KEY` (clave de Buffer; si no, la guardada desde Sistema).
 
 ## Invariantes (no romper)
 
 - **Prompt ↔ app.** Si cambias los pasos o los archivos de salida en `system_prompt.md`, actualiza `STEPS` en `library.py`, los textos `KICKOFF`/`RESUME` de `core.py` y `demo.py` (que imita la salida real). Si añades una variable `{{X}}`, rellénala en `core.py`: una prueba verifica que no quede ninguna sin rellenar.
 - **Límites de publicación.** `MAX_HASHTAGS`, `MAX_SHORT_DESCRIPTION` y `MAX_TITLE` (`library.py`) deben coincidir con lo que exige §11 del prompt, y `MAX_VOICE_START` y `MAX_HOOK_WORDS`, con el gancho de §2 y §7. Lo mismo vale para la duración (60–65 s), las resoluciones, 24 fps, H.264 `yuv420p`, AAC 48 kHz y −14 LUFS ±1.
 - **El agente trabaja en primer plano.** `AGENT_ENV` desactiva las tareas en segundo plano y `DISALLOWED_TOOLS` bloquea las de «esperar»: al cerrar el turno, el proceso de Claude Code mata lo que siga corriendo, como un render a medias. `agent_env()` pone el `.venv` al frente del `PATH` del agente; no lo quites.
+- **Nunca tocar el Drive real en pruebas ni en demo.** Con `demo=True` el publicador solo usa su carpeta simulada de `data/`, y las pruebas anulan `publishing.drive_roots`. Las claves de `SECRET_ENV` se vacían en el entorno del agente.
 - **Seguridad.** El agente corre con `permission_mode="acceptEdits"` y con `Bash` sin confirmación. Fuera de `127.0.0.1`, la app exige token. No debilites esto.
 - **`stage.html` y `renderAt`.** `renderAt(t)` es función pura del tiempo y no devuelve nada; GSAP (en `assets/vendor/`, versión fija en `setup.sh`) solo se usa en una timeline en pausa movida con `seek`. Cuando la app llame a `renderAt` desde Playwright, envuélvelo en una función que no devuelva nada (`() => { window.renderAt(t); }`): serializar una timeline de GSAP cuelga `evaluate`.
 - **Personajes.** Al crear un trabajo, el personaje se copia en la petición (`VideoRequest.personaje`): editarlo después no cambia un video a medias. Los trabajos y videos sin personaje (anteriores a esta función) son de Lía (`LIA.id`). El agente escribe `"personaje"` en `script.json` y `publish.json`; la biblioteca agrupa por ese campo. Los temas no se repiten dentro de un personaje e idioma.

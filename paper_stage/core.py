@@ -59,6 +59,7 @@ AGENT_ENV = {
     "BASH_MAX_TIMEOUT_MS": str(2 * 60 * 60 * 1000),
 }
 DISALLOWED_TOOLS = ["ScheduleWakeup", "Monitor", "CronCreate", "RemoteTrigger"]
+SECRET_ENV = ["PAPER_STAGE_TOKEN", "PAPER_STAGE_BUFFER_KEY"]
 
 
 def agent_env() -> dict[str, str]:
@@ -66,6 +67,8 @@ def agent_env() -> dict[str, str]:
     `python3` y `playwright` a secas, y sin esto usaría los del sistema (sin Kokoro,
     Whisper ni Playwright) si la app no se lanzó con el venv activado (p. ej. run.sh)."""
     env = dict(AGENT_ENV)
+    # El agente hereda el entorno de la app: que no vea las claves de la app.
+    env.update({name: "" for name in SECRET_ENV if os.environ.get(name)})
     if sys.prefix != sys.base_prefix:
         bin_dir = str(Path(sys.prefix) / ("Scripts" if os.name == "nt" else "bin"))
         env["VIRTUAL_ENV"] = sys.prefix

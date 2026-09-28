@@ -378,3 +378,29 @@ async def suggest_characters_demo(idioma: str, edad: str, pista: str, avoid: lis
         data = {**idea, "nicho": idea["nicho"][idioma], "serie": idea["serie"][idioma]}
         ideas.append({"gancho": idea["gancho"], "personaje": character_from_idea(data, idioma, edad).to_dict()})
     return ideas[:n]
+
+
+def demo_publisher_parts(data_dir: Path) -> dict:
+    """Drive y Buffer simulados para el modo demo: sin red, sin cuentas y sin publicar nada."""
+    from .publishing import BUFFER_API
+
+    folder = data_dir / "drive-demo" / "Teatrito de Papel - publicar"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    def http(method: str, url: str, headers: dict, body: bytes | None) -> tuple[int, dict, bytes]:
+        if url != BUFFER_API:  # la "descarga" de Drive: los primeros bytes de un MP4
+            return 206, {"Content-Type": "video/mp4"}, b"\x00\x00\x00\x18ftypmp42"
+        query = json.loads(body or b"{}").get("query", "")
+        if "createPost" in query:
+            data = {"createPost": {"post": {"id": "demo-post", "dueAt": None}}}
+        elif "organizations" in query:
+            data = {"account": {"organizations": [{"id": "demo-org", "name": "Demo"}]}}
+        else:
+            data = {"channels": [{"id": "demo-tiktok", "name": "teatrito", "displayName": "@teatrito (demo)",
+                                  "service": "tiktok"}]}
+        return 200, {"Content-Type": "application/json"}, json.dumps({"data": data}).encode()
+
+    def drive_id(path: Path) -> str | None:
+        return f"demo-{abs(hash(path.name)) % 10**8}" if path.exists() else None
+
+    return {"http": http, "drive_id": drive_id, "poll": 0.2, "demo": True, "default_folder": folder}

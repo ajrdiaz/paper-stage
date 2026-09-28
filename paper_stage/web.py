@@ -21,6 +21,7 @@ from starlette.staticfiles import StaticFiles
 
 from . import core, library
 from .jobs import TERMINAL, JobManager
+from .publishing import TEST_SLUG, PublishError, PublishRequest, Publisher, default_text, text_units
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -84,7 +85,8 @@ class TokenAuth(BaseHTTPMiddleware):
 
 
 def create_app(manager: JobManager | None = None, token: str | None = None,
-               suggester: Callable | None = None, character_suggester: Callable | None = None) -> Starlette:
+               suggester: Callable | None = None, character_suggester: Callable | None = None,
+               publisher: Publisher | None = None) -> Starlette:
     if manager is None:
         runner = None
         if os.environ.get("PAPER_STAGE_DEMO") == "1":
@@ -101,6 +103,12 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             from .demo import suggest_demo as suggester
         else:
             suggester = core.suggest_topics
+    if publisher is None:
+        parts = {}
+        if demo:
+            from .demo import demo_publisher_parts
+            parts = demo_publisher_parts(manager.data_dir)
+        publisher = Publisher(manager.store.db, **parts)
     if character_suggester is None:
         if demo:
             from .demo import suggest_characters_demo as character_suggester
@@ -111,6 +119,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
     async def lifespan(app):
         await manager.start()
         yield
+        await publisher.stop()
         await manager.stop()
 
     # ------------------------------------------------------------------ configuración
@@ -308,10 +317,70 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    # ------------------------------------------------------------------ publicación (Buffer + Drive)
+
+    async def publishing_config(request: Request):
+        return JSONResponse(publisher.config())
+
+    async def save_publishing(request: Request):
+        try:
+            return JSONResponse(publisher.save_config(await _json(request)))
+        except (PublishError, ValueError, OSError) as exc:
+            return _error(str(exc))
+
+    async def publishing_channels(request: Request):
+        try:
+            return JSONResponse(await publisher.channels())
+        except PublishError as exc:
+            return _error(str(exc), 502)
+
+    async def publishing_test(request: Request):
+        if request.method == "GET":
+            return JSONResponse(publisher.state(TEST_SLUG))
+        try:
+            return JSONResponse(publisher.start(TEST_SLUG, None))
+        except PublishError as exc:
+            return _error(str(exc), 409)
+
+    async def video_publish(request: Request):
+        slug = request.path_params["slug"]
+        try:
+            out_dir = library.slug_dir(slug)
+        except ValueError:
+            return _error("Video no válido.", 400)
+        if request.method == "GET":
+            publish = library.read_json(out_dir / "publish.json")
+            text = default_text(publish if isinstance(publish, dict) else {})
+            return JSONResponse({**publisher.state(slug), "default_text": text,
+                                 "default_units": text_units(text), "config": publisher.config()})
+        try:
+            payload = await _json(request)
+            req = PublishRequest(text=str(payload.get("text") or ""), mode=str(payload.get("mode") or "queue"),
+                                 due_at=payload.get("due_at") or None, ai_label=bool(payload.get("ai_label", True)),
+                                 again=bool(payload.get("again")))
+            return JSONResponse(publisher.start(slug, req))
+        except (PublishError, ValueError) as exc:
+            return _error(str(exc), 409 if "ya se envió" in str(exc) or "ya está publicado" in str(exc) else 400)
+
+    async def video_mark_published(request: Request):
+        slug = request.path_params["slug"]
+        try:
+            if request.method == "DELETE":
+                return JSONResponse(publisher.unmark(slug, int(request.path_params.get("pub_id") or 0)))
+            return JSONResponse(publisher.mark_manual(slug))
+        except ValueError:
+            return _error("Video no válido.", 400)
+        except PublishError as exc:
+            return _error(str(exc), 409)
+
     # ------------------------------------------------------------------ biblioteca
 
     async def list_videos(request: Request):
-        return JSONResponse(await asyncio.to_thread(library.list_videos))
+        videos = await asyncio.to_thread(library.list_videos)
+        published = publisher.published()
+        for video in videos:
+            video["en_tiktok"] = video["slug"] in published
+        return JSONResponse(videos)
 
     async def get_video(request: Request):
         slug = request.path_params["slug"]
@@ -385,6 +454,13 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Route("/api/videos", list_videos),
         Route("/api/videos/{slug}", get_video),
         Route("/api/videos/{slug}", delete_video, methods=["DELETE"]),
+        Route("/api/videos/{slug}/publish", video_publish, methods=["GET", "POST"]),
+        Route("/api/videos/{slug}/publish/manual", video_mark_published, methods=["POST"]),
+        Route("/api/videos/{slug}/publish/{pub_id:int}", video_mark_published, methods=["DELETE"]),
+        Route("/api/publishing", publishing_config),
+        Route("/api/publishing", save_publishing, methods=["PUT"]),
+        Route("/api/publishing/channels", publishing_channels),
+        Route("/api/publishing/test", publishing_test, methods=["GET", "POST"]),
         Route("/poster/{slug}.jpg", poster),
         Route("/cover/{slug}.jpg", cover),
         Route("/files/{slug}/{path:path}", output_file),
@@ -395,4 +471,5 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
     middleware = [Middleware(TokenAuth, token=token)] if token else []
     app = Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
     app.state.manager = manager
+    app.state.publisher = publisher
     return app

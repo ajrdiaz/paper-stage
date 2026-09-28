@@ -630,13 +630,15 @@ async function renderLibrary(params) {
   view.innerHTML = `
     <div class="page-head"><div><h1>Biblioteca</h1><p>Todos los videos en <code>output/</code>, también los hechos desde la terminal.</p></div>
       <div class="row">
+        <select id="lib-pub" class="search" aria-label="Publicación"><option value="">Publicados y sin publicar</option>
+          <option value="no">Sin publicar en TikTok</option><option value="si">Ya en TikTok</option></select>
         <select id="lib-char" class="search" aria-label="Personaje"><option value="">Todos los personajes</option>
           ${CHARACTERS.map(c => `<option value="${esc(c.id)}" ${who === c.id ? "selected" : ""}>${esc(c.nombre)}</option>`).join("")}</select>
         <input type="text" class="search" id="search" placeholder="Buscar…" aria-label="Buscar videos"></div></div>
     <div id="gallery" class="gallery"></div>`;
   const draw = () => {
-    const filter = $("#search").value.trim().toLowerCase(), pid = $("#lib-char").value;
-    const list = videos.filter(v => (!pid || v.personaje === pid)
+    const filter = $("#search").value.trim().toLowerCase(), pid = $("#lib-char").value, pub = $("#lib-pub").value;
+    const list = videos.filter(v => (!pid || v.personaje === pid) && (!pub || (pub === "si") === !!v.en_tiktok)
       && (!filter || `${v.title} ${v.slug} ${v.gancho || ""} ${charName(v.personaje)}`.toLowerCase().includes(filter)));
     $("#gallery").innerHTML = list.length ? list.map(v => `
       <a class="vcard" href="#/video/${esc(v.slug)}">
@@ -647,6 +649,7 @@ async function renderLibrary(params) {
           <div class="row small">
             ${v.idioma ? `<span class="pill lang">${esc(v.idioma.toUpperCase())}</span>` : ""}
             <span class="muted">${esc(charName(v.personaje))}</span>
+            ${v.en_tiktok ? `<span class="pill plain done">En TikTok</span>` : ""}
             ${v.has_video ? `<span class="pill done">Video listo</span>` : `<span class="pill">${v.steps_done}/${v.steps_total} pasos</span>`}
             ${v.qa ? `<span class="pill plain ${v.qa.failed ? "failed" : "done"}">QA ${v.qa.passed}/${v.qa.total}</span>` : ""}
             ${v.verify && !v.verify.ok ? `<span class="pill plain failed" title="La revisión automática encontró problemas">Revisar</span>` : ""}
@@ -657,6 +660,7 @@ async function renderLibrary(params) {
   draw();
   $("#search").addEventListener("input", draw);
   $("#lib-char").addEventListener("change", draw);
+  $("#lib-pub").addEventListener("change", draw);
 }
 
 /* ------------------------------------------------------------------ vista previa interactiva */
@@ -786,6 +790,7 @@ async function renderVideo(slug) {
   const bodies = {
     publish: () => `
       <div class="stack">
+        ${v.has_video ? `<section class="pub-box" id="pub-box" aria-live="polite"><p class="small muted">Cargando…</p></section>` : ""}
         ${(publish.titulos || []).length ? `<h3>Títulos</h3>${publish.titulos.map(t => copyRow(t)).join("")}` : ""}
         ${publish.descripcion_corta ? `<h3>Descripción corta <span class="small muted">TikTok y Reels</span></h3>${copyRow(publish.descripcion_corta)}` : ""}
         ${publish.descripcion ? `<h3>Descripción${publish.descripcion_corta ? ` <span class="small muted">YouTube</span>` : ""}</h3>${copyRow(publish.descripcion)}` : ""}
@@ -826,6 +831,7 @@ async function renderVideo(slug) {
   const showTab = key => {
     $$(".tabbar button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === key));
     $("#tab-body").innerHTML = bodies[key]();
+    if ($("#pub-box")) mountPublish($("#pub-box"), v.slug);
   };
   $(".tabbar").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) showTab(b.dataset.tab); });
   showTab(tabs[0][0]);
@@ -1081,6 +1087,8 @@ async function renderSystem() {
   view.innerHTML = `<div class="page-head"><div><h1>Sistema</h1><p>Lo que el agente necesita en este equipo para producir los videos.</p></div></div>
     <div class="grid-studio"><section class="card stack" id="deps"><p class="muted">Revisando…</p></section>
     <section class="card stack" id="about"></section></div>`;
+  view.insertAdjacentHTML("beforeend", `<section class="card stack" id="publishing" style="margin-top:24px"></section>`);
+  mountPublishingSetup($("#publishing"));
   const health = await api("/api/health");
   const group = (kind, title) => `<h2>${title}</h2><ul class="checklist">${health.items.filter(i => i.kind === kind).map(i => `
     <li class="${i.ok ? "ok" : i.optional ? "" : "bad"}"><span class="mark">${i.ok ? "✓" : i.optional ? "·" : "✗"}</span>
@@ -1104,6 +1112,174 @@ async function renderSystem() {
     <p class="small">El agente ejecuta comandos y edita archivos sin pedir confirmación. La app escucha solo en este equipo;
       si la expones con <code>--host 0.0.0.0</code>, pide un token de acceso.</p>
     ${CONFIG.demo ? `<p class="pill running">Modo demostración activo</p>` : ""}`;
+}
+
+/* ------------------------------------------------------------------ publicar en TikTok (Buffer + Drive) */
+
+const PUB_MODES = { queue: "En la cola de Buffer", now: "Ahora", schedule: "Programar" };
+const PUB_DONE = { ...PUB_MODES, now: "Publicado ahora", schedule: "Programado", manual: "Subido a mano" };
+const fmtUnits = text => text.length; // Buffer cuenta unidades UTF-16, igual que .length en JS
+
+async function mountPublishingSetup(box) {
+  let cfg = await api("/api/publishing");
+  const draw = () => {
+    box.innerHTML = `
+      <div class="row"><h2>Publicar en TikTok</h2><span class="spacer"></span>
+        ${cfg.ready ? `<span class="pill done">Configurado</span>` : `<span class="pill">Sin configurar</span>`}
+        ${cfg.demo ? `<span class="pill running">Simulado en modo demo</span>` : ""}</div>
+      <p class="small muted">Buffer publica el video en tu TikTok. Como Buffer no acepta archivos, la app copia el video a una carpeta
+        de Google Drive compartida con enlace y le pasa a Buffer ese enlace. Se configura una sola vez.</p>
+      <ol class="setup-steps">
+        <li><strong>Carpeta de Google Drive</strong>
+          <div class="row"><input type="text" id="pub-folder" value="${esc(cfg.drive_folder)}" aria-label="Carpeta de Drive">
+            <button class="btn small" id="pub-folder-save">${cfg.drive_folder_exists ? "Guardar" : "Crear carpeta"}</button></div>
+          <span class="hint">${cfg.drive_folder_exists ? "✓ La carpeta existe." : cfg.drive_roots.length ? "Aún no existe: pulsa «Crear carpeta»." : "No encontré Google Drive para escritorio: instálalo e inicia sesión."}
+            Luego, en <a href="https://drive.google.com" target="_blank" rel="noopener">drive.google.com</a>: clic derecho en la carpeta → Compartir →
+            Acceso general: <strong>«Cualquier persona con el enlace»</strong> (Lector). Todo lo que pongas en esa carpeta será visible con su enlace.</span></li>
+        <li><strong>Clave de API de Buffer</strong>
+          <div class="row"><input type="password" id="pub-key" autocomplete="off" aria-label="Clave de API de Buffer"
+              placeholder="${cfg.buffer_key ? `Guardada (${esc(cfg.buffer_key_hint)})` : "Pega aquí tu clave"}" ${cfg.buffer_key_env ? "disabled" : ""}>
+            <button class="btn small" id="pub-key-save" ${cfg.buffer_key_env ? "disabled" : ""}>Guardar</button></div>
+          <span class="hint">${cfg.buffer_key_env ? "Viene de la variable PAPER_STAGE_BUFFER_KEY." :
+            "En Buffer, conecta tu cuenta de TikTok y crea una clave en la sección API de la configuración (solo la persona dueña de la organización puede). Se guarda solo en este equipo, en data/."}</span></li>
+        <li><strong>Cuenta de TikTok</strong>
+          <div class="row"><select id="pub-channel" aria-label="Cuenta de TikTok">
+              ${cfg.channel_id ? `<option value="${esc(cfg.channel_id)}">${esc(cfg.channel_name || cfg.channel_id)}</option>` : `<option value="">(ninguna)</option>`}</select>
+            <button class="btn small" id="pub-channels" ${cfg.buffer_key ? "" : "disabled"}>Cargar cuentas de Buffer</button></div></li>
+        <li><label class="row"><input type="checkbox" id="pub-ai" ${cfg.ai_label ? "checked" : ""}>
+          Declarar en TikTok que el contenido está generado con IA</label>
+          <span class="hint">Recomendado: el guion, la voz y la animación los hace la IA, y TikTok pide declararlo.</span></li>
+      </ol>
+      <p id="pub-error" class="small" style="color:var(--warn)" role="alert"></p>
+      <div class="row"><button class="btn primary" id="pub-test" ${cfg.buffer_key && cfg.drive_folder_exists ? "" : "disabled"}>Probar la configuración</button>
+        <span class="small muted" id="pub-test-status">Sube un video de 1 s a la carpeta y comprueba que Drive lo sirve en público y que Buffer responde.</span></div>`;
+  };
+  const save = async body => {
+    $("#pub-error", box).textContent = "";
+    try { cfg = await api("/api/publishing", { method: "PUT", body }); draw(); toast("Guardado.", "ok"); }
+    catch (err) { $("#pub-error", box).textContent = err.message; }
+  };
+  draw();
+  box.addEventListener("click", async ev => {
+    const id = ev.target.id;
+    if (id === "pub-folder-save") save({ drive_folder: $("#pub-folder", box).value, create_folder: true });
+    if (id === "pub-key-save") save({ buffer_key: $("#pub-key", box).value });
+    if (id === "pub-channels") {
+      ev.target.disabled = true;
+      try {
+        const channels = await api("/api/publishing/channels");
+        const sel = $("#pub-channel", box);
+        sel.innerHTML = channels.length ? channels.map(c => `<option value="${esc(c.id)}" ${c.id === cfg.channel_id ? "selected" : ""}>${esc(c.nombre)}</option>`).join("")
+          : `<option value="">No hay cuentas de TikTok conectadas en Buffer</option>`;
+        if (channels.length && !cfg.channel_id) save({ channel_id: channels[0].id, channel_name: channels[0].nombre });
+      } catch (err) { $("#pub-error", box).textContent = err.message; }
+      finally { ev.target.disabled = false; }
+    }
+    if (id === "pub-test") {
+      try {
+        await api("/api/publishing/test", { method: "POST" });
+        followStatus("/api/publishing/test", st => { $("#pub-test-status", box).textContent = st.status?.step || ""; }, box);
+      } catch (err) { $("#pub-error", box).textContent = err.message; }
+    }
+  });
+  box.addEventListener("change", ev => {
+    if (ev.target.id === "pub-channel" && ev.target.value) save({ channel_id: ev.target.value, channel_name: ev.target.selectedOptions[0].textContent });
+    if (ev.target.id === "pub-ai") save({ ai_label: ev.target.checked });
+  });
+}
+
+// Consulta el estado de una publicación cada 2 s mientras siga en curso y el elemento esté en pantalla.
+function followStatus(path, paint, el) {
+  const tick = async () => {
+    if (!document.body.contains(el)) return;
+    const st = await api(path);
+    paint(st);
+    if (st.status?.state === "running") setTimeout(tick, 2000);
+  };
+  tick();
+}
+
+async function mountPublish(box, slug) {
+  const path = `/api/videos/${encodeURIComponent(slug)}/publish`;
+  let data;
+  try { data = await api(path); } catch (err) { box.innerHTML = `<p class="small">${esc(err.message)}</p>`; return; }
+  const cfg = data.config;
+  const manual = data.history.some(h => h.mode === "manual");
+  const history = () => data.history.length ? `<ul class="pub-history">${data.history.map(h => `
+    <li>✓ ${esc(h.channel_name || "TikTok")} · ${esc(PUB_DONE[h.mode] || h.mode)}${h.due_at ? ` · ${esc(new Date(h.due_at).toLocaleString("es"))}` : ""}
+      <span class="small muted">${h.mode === "manual" ? "marcado" : "enviado"} ${fmtDate(h.created_at)}</span>
+      ${h.mode === "manual" ? `<button type="button" class="btn small" data-unmark="${h.id}">Quitar marca</button>` : ""}</li>`).join("")}</ul>` : "";
+  const markButton = manual ? "" : `<button type="button" class="btn small" id="pub-mark">Ya lo subí a TikTok: marcar como publicado</button>`;
+  box.onclick = async ev => {
+    const unmark = ev.target.closest("[data-unmark]");
+    if (ev.target.id !== "pub-mark" && !unmark) return;
+    if (unmark && !confirmAction("¿Quitar la marca de «subido a mano»?")) return;
+    try {
+      await api(unmark ? `${path}/${unmark.dataset.unmark}` : `${path}/manual`, { method: unmark ? "DELETE" : "POST" });
+      mountPublish(box, slug);
+    } catch (err) { toast(esc(err.message), "err"); }
+  };
+  const status = () => {
+    const st = data.status;
+    if (!st) return "";
+    const cls = st.state === "failed" ? "failed" : st.state === "done" ? "done" : "running";
+    return `<div class="pub-status ${cls}"><span class="pill ${cls}">${st.state === "running" ? "Publicando" : st.state === "done" ? "Listo" : "Falló"}</span>
+      <span>${esc(st.step)}</span></div>`;
+  };
+  if (!cfg.ready) {
+    box.innerHTML = `<div class="row"><h3>Publicar en TikTok</h3>${data.history.length ? `<span class="pill done">En TikTok</span>` : ""}</div>${history()}
+      <p class="small muted">Para publicar desde aquí, configura Buffer y Google Drive en <a href="#/sistema">Sistema</a>.</p>
+      <div class="row">${markButton}</div>`;
+    return;
+  }
+  const running = data.status?.state === "running";
+  const sent = data.history.some(h => h.channel_id === cfg.channel_id) || manual;
+  box.innerHTML = `
+    <div class="row"><h3>Publicar en TikTok</h3>${data.history.length ? `<span class="pill done">En TikTok</span>` : ""}
+      <span class="spacer"></span><span class="small muted">${esc(cfg.channel_name)}</span></div>
+    ${history()}${status()}
+    ${manual && !running ? `<p class="small muted">Ya está en TikTok. Si de verdad quieres enviarlo otra vez por Buffer,
+      <button type="button" class="btn small" id="pub-show">muestra el formulario</button>.</p>` : ""}
+    <div class="row">${running ? "" : markButton}</div>
+    <form id="pub-form" class="stack" ${running || manual ? "hidden" : ""}>
+      <div class="field"><label for="pub-text">Texto</label>
+        <textarea id="pub-text" rows="4">${esc(data.default_text)}</textarea>
+        <span class="hint" id="pub-count"></span></div>
+      <div class="segmented" role="radiogroup" aria-label="Cuándo">
+        ${Object.entries(PUB_MODES).map(([k, label], i) => `<label><input type="radio" name="pub-mode" value="${k}" ${i === 0 ? "checked" : ""}><span>${label}</span></label>`).join("")}</div>
+      <input type="datetime-local" id="pub-when" class="hidden" aria-label="Fecha y hora">
+      <label class="row small"><input type="checkbox" id="pub-ai2" ${cfg.ai_label ? "checked" : ""}> Declarar contenido generado con IA</label>
+      <p id="pub-err" class="small" style="color:var(--warn)" role="alert"></p>
+      <div class="row"><span class="small muted">La portada será el fotograma de <code>frame_portada_s</code>. El video debe quedarse en Drive hasta que se publique.</span>
+        <span class="spacer"></span><button class="btn primary" type="submit">${sent ? "Publicar otra vez" : "Publicar en TikTok"}</button></div>
+    </form>`;
+  $("#pub-show", box)?.addEventListener("click", () => { $("#pub-form", box).hidden = false; $("#pub-show", box).closest("p").remove(); });
+  const count = () => {
+    const n = fmtUnits($("#pub-text", box).value);
+    $("#pub-count", box).textContent = `${n} / 2200 caracteres`;
+    $("#pub-count", box).style.color = n > 2200 ? "var(--warn)" : "";
+  };
+  count();
+  $("#pub-text", box).addEventListener("input", count);
+  $$("input[name=pub-mode]", box).forEach(r => r.addEventListener("change", () =>
+    $("#pub-when", box).classList.toggle("hidden", r.value !== "schedule" || !r.checked)));
+  $("#pub-form", box).addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const mode = $("input[name=pub-mode]:checked", box).value, when = $("#pub-when", box).value;
+    if (mode === "now" && !confirmAction("¿Publicar este video en TikTok ahora mismo?")) return;
+    if (sent && !confirmAction(manual ? "Este video ya está en TikTok (subido a mano). ¿Enviarlo otra vez por Buffer?"
+      : "Este video ya se envió a esa cuenta. ¿Enviarlo otra vez?")) return;
+    try {
+      await api(path, { method: "POST", body: { text: $("#pub-text", box).value, mode, ai_label: $("#pub-ai2", box).checked, again: sent,
+        due_at: mode === "schedule" && when ? new Date(when).toISOString() : null } });
+      mountPublish(box, slug);
+    } catch (err) { $("#pub-err", box).textContent = err.message; }
+  });
+  if (running) followStatus(path, st => {
+    if (st.status?.state !== "running") { mountPublish(box, slug); return; }
+    data = { ...data, ...st };
+    box.querySelector(".pub-status")?.replaceWith(Object.assign(document.createElement("div"), { innerHTML: status() }).firstElementChild);
+  }, box);
 }
 
 /* ------------------------------------------------------------------ enrutador */
