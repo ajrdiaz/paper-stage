@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .core import OUTPUT_DIR, SLUG_RE
+from .core import LIA, OUTPUT_DIR, SLUG_RE, slugify
 
 # Paso del pipeline (§1 del prompt) → archivos que indican que está hecho.
 # "a|b" vale con cualquiera de los dos: los videos anteriores al QA previo no tienen
@@ -201,6 +201,9 @@ def poster(out_dir: Path) -> Path | None:
 # Lo que la app comprueba por su cuenta en cada video terminado, sin fiarse de qa.md.
 SIZES = {"vertical": (1080, 1920), "horizontal": (1920, 1080)}
 MAX_HASHTAGS, MAX_SHORT_DESCRIPTION, MAX_TITLE = 5, 150, 60
+# Gancho (§2 y §7 del prompt): la voz arranca casi en el frame 1 y el gancho escrito es corto.
+MAX_VOICE_START, MAX_HOOK_WORDS = 0.3, 6
+VOICE_SILENCE_DB = -35  # el mismo umbral de "hay voz" que el QA del prompt
 
 
 def _probe(video: Path) -> dict:
@@ -219,6 +222,20 @@ def _loudness(video: Path) -> float | None:
     ).stderr
     match = re.search(r'"input_i"\s*:\s*"(-?[\d.]+|-inf)"', err)
     return float(match.group(1)) if match and match.group(1) != "-inf" else None
+
+
+def _voice_start(voice: Path) -> float | None:
+    """Segundo en que empieza la voz (primer tramo por encima de −35 dBFS); None si no se oye."""
+    err = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostats", "-i", str(voice),
+         "-af", f"silencedetect=noise={VOICE_SILENCE_DB}dB:d=0.02", "-f", "null", "-"],
+        capture_output=True, text=True, timeout=120,
+    ).stderr
+    starts = [float(x) for x in re.findall(r"silence_start: (-?[\d.]+)", err)]
+    ends = [float(x) for x in re.findall(r"silence_end: (-?[\d.]+)", err)]
+    if not starts or starts[0] > 0.01:
+        return 0.0  # no empieza en silencio
+    return ends[0] if ends else None  # sin silence_end: todo el archivo es silencio
 
 
 def _checks(out_dir: Path) -> list[dict]:
@@ -251,6 +268,17 @@ def _checks(out_dir: Path) -> list[dict]:
     lufs = _loudness(video) if a else None
     check("Volumen −14 LUFS ±1", lufs is not None and abs(lufs + 14) <= 1,
           f"{lufs:.1f} LUFS" if lufs is not None else "no se pudo medir")
+    voice = out_dir / "voice.wav"
+    start = _voice_start(voice) if voice.exists() else None
+    check(f"La voz empieza en ≤{MAX_VOICE_START} s", start is not None and start <= MAX_VOICE_START,
+          f"{start:.2f} s" if start is not None else ("sin voz en voice.wav" if voice.exists() else "falta voice.wav"))
+    script = script if isinstance(script, dict) else {}
+    # Los videos anteriores al gancho escrito no tienen estos campos: no se les exige.
+    if "texto_gancho" in script or "tipo_gancho" in script:
+        hook = " ".join(str(script.get("texto_gancho") or "").split())
+        words = len(hook.split())
+        check(f"Gancho escrito de {MAX_HOOK_WORDS} palabras como máximo", 0 < words <= MAX_HOOK_WORDS,
+              f"«{hook}» ({words} palabras)" if hook else "falta texto_gancho")
     hashtags = publish.get("hashtags") or []
     check(f"{MAX_HASHTAGS} hashtags", len(hashtags) == MAX_HASHTAGS, f"{len(hashtags)}")
     short = str(publish.get("descripcion_corta") or "")
@@ -268,7 +296,8 @@ def verify(out_dir: Path, compute: bool = True) -> dict | None:
     video, cache = out_dir / "final.mp4", out_dir / "verify.json"
     if not video.exists():
         return None
-    sources = [p for p in (video, out_dir / "publish.json", out_dir / "script.json") if p.exists()]
+    sources = [p for p in (video, out_dir / "publish.json", out_dir / "script.json", out_dir / "voice.wav")
+               if p.exists()]
     stamp = [round(p.stat().st_mtime, 3) for p in sources]
     cached = read_json(cache)
     if isinstance(cached, dict) and cached.get("stamp") == stamp:
@@ -292,6 +321,13 @@ def _title(out_dir: Path) -> str:
     return out_dir.name.replace("-", " ").capitalize()
 
 
+def script_character(script: dict | None) -> str:
+    """ID del personaje de un script.json. Los videos anteriores a los personajes no lo
+    indican (son de Lía), y alguno trae el nombre («Lía») en vez del ID: slugify los iguala."""
+    value = script.get("personaje") if isinstance(script, dict) else None
+    return slugify(str(value)) if value else LIA.id
+
+
 def summary(out_dir: Path) -> dict:
     script = read_json(out_dir / "script.json")
     script = script if isinstance(script, dict) else {}
@@ -302,7 +338,9 @@ def summary(out_dir: Path) -> dict:
         "title": _title(out_dir),
         "idioma": script.get("idioma"),
         "formato": script.get("formato"),
+        "personaje": script_character(script),
         "gancho": script.get("gancho"),
+        "tipo_gancho": script.get("tipo_gancho"),
         "has_video": final.exists(),
         "has_stage": (out_dir / "stage.html").exists(),
         "duration": duration(final),
@@ -319,6 +357,20 @@ def list_videos() -> list[dict]:
         return []
     dirs = [d for d in OUTPUT_DIR.iterdir() if d.is_dir() and SLUG_RE.match(d.name)]
     return sorted((summary(d) for d in dirs), key=lambda v: v["updated"], reverse=True)
+
+
+def videos_of(personaje: str, limit: int = 3) -> list[str]:
+    """Slugs de los videos terminados de un personaje, del más reciente al más antiguo."""
+    return [v["slug"] for v in list_videos() if v["personaje"] == personaje and v["has_video"]][:limit]
+
+
+def hooks_of(personaje: str, limit: int = 6) -> list[str]:
+    """Ganchos de los últimos videos de un personaje («tipo: gancho»), del más reciente al más antiguo."""
+    hooks = []
+    for v in list_videos():
+        if v["personaje"] == personaje and v.get("gancho"):
+            hooks.append(f"{v['tipo_gancho']}: {v['gancho']}" if v.get("tipo_gancho") else str(v["gancho"]))
+    return hooks[:limit]
 
 
 def detail(slug: str) -> dict | None:

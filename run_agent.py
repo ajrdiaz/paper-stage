@@ -3,6 +3,8 @@
 
 Ejemplos:
     python run_agent.py --tema "Radiación de Hawking" --edad 6-9
+    python run_agent.py --personajes                  # lista los personajes (se crean en la app web)
+    python run_agent.py --personaje coral --tema "¿Por qué brillan los peces abisales?"
     python run_agent.py --tema "Hawking radiation" --idioma en --formato horizontal
     python run_agent.py --check                       # verifica dependencias locales
     python run_agent.py --tema "Volcanes" --dry-run   # imprime el prompt final
@@ -59,11 +61,13 @@ async def run(req: core.VideoRequest, resume: str | None) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Agente «Teatrito de Papel» (videos de 60–65 s).")
     parser.add_argument("--tema", help="Tema del video, en el idioma del video.")
-    parser.add_argument("--edad", default="6-9", help="Rango de edad (por defecto: 6-9).")
-    parser.add_argument("--idioma", choices=core.LANGUAGES, default="es")
+    parser.add_argument("--personaje", default=core.LIA.id,
+                        help=f"ID del personaje que presenta el video (por defecto: {core.LIA.id}).")
+    parser.add_argument("--edad", default="", help="Rango de edad (por defecto: el del personaje).")
+    parser.add_argument("--idioma", choices=core.LANGUAGES, default="",
+                        help="Idioma del video (por defecto: el idioma principal del personaje).")
     parser.add_argument("--formato", choices=core.FORMATS, default="vertical")
-    parser.add_argument("--cta", default="", help="Frase final que dice Lía "
-                        f"(por defecto: «{core.DEFAULT_CTA['es']}» / «{core.DEFAULT_CTA['en']}»).")
+    parser.add_argument("--cta", default="", help="Frase final que dice el personaje (por defecto: la suya).")
     parser.add_argument("--slug", default="", help="Carpeta de salida (por defecto: tema + idioma).")
     parser.add_argument("--model", default=core.DEFAULT_MODEL, help=f"Modelo (por defecto: {core.DEFAULT_MODEL}).")
     parser.add_argument("--effort", choices=core.EFFORTS, default="high")
@@ -72,12 +76,18 @@ def main() -> int:
     parser.add_argument("--resume", metavar="SESSION_ID", help="Continúa una sesión interrumpida.")
     parser.add_argument("--dry-run", action="store_true", help="Solo imprime el system prompt final.")
     parser.add_argument("--check", action="store_true", help="Verifica dependencias y sale.")
+    parser.add_argument("--personajes", action="store_true", help="Lista los personajes y sale.")
     args = parser.parse_args()
 
     if args.check:
         return 0 if print_check() else 1
+    manager = jobs.JobManager(core.DATA_DIR)
+    if args.personajes:
+        for c in manager.characters.list():
+            print(f"{c.id:<16} {c.nombre} · {c.nicho} · {c.idioma} · {c.edad} años")
+        return 0
     if not args.tema:
-        parser.error("--tema es obligatorio (salvo con --check)")
+        parser.error("--tema es obligatorio (salvo con --check o --personajes)")
 
     req = core.VideoRequest(
         tema=args.tema, edad=args.edad, idioma=args.idioma, formato=args.formato,
@@ -85,18 +95,19 @@ def main() -> int:
         max_turns=args.max_turns, max_budget_usd=args.max_budget_usd,
     )
     try:
-        req.validate()
+        manager.prepare(req, args.personaje)
         prompt = core.render_prompt(req.variables())
     except ValueError as exc:
         parser.error(str(exc))
     if args.dry_run:
         print(prompt)
         return 0
-    if not args.resume and jobs.JobManager(core.DATA_DIR).is_used(req.tema, req.idioma):
-        parser.error(f"ya hay un video sobre «{req.tema}» en este idioma; los temas no se repiten "
-                     "(usa --resume para continuar uno interrumpido).")
+    if not args.resume and manager.is_used(req.tema, req.idioma, req.character.id):
+        parser.error(f"{req.character.nombre} ya tiene un video sobre «{req.tema}» en este idioma; los temas "
+                     "no se repiten (usa --resume para continuar uno interrumpido).")
 
-    print(f"Tema: {req.tema} · {req.edad} años · {req.idioma} · {req.formato} → output/{req.slug}/")
+    print(f"{req.character.nombre} · Tema: {req.tema} · {req.edad} años · {req.idioma} · {req.formato} "
+          f"→ output/{req.slug}/")
     return asyncio.run(run(req, args.resume))
 
 

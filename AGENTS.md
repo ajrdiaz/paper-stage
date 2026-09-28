@@ -4,7 +4,7 @@ Guía para agentes de código que trabajan en este repositorio. Para el uso de l
 
 ## Qué es
 
-Una app web y una CLI lanzan un agente del Claude Agent SDK que produce videos educativos infantiles de 60–65 s con estilo de recortes de papel. En ellos, la niña Lía guía cada video desde un teatrito. Todo corre en local salvo el propio agente: voz Kokoro, faster-whisper, `stage.html` renderizado con Playwright, y música y efectos sintetizados por código.
+Una app web y una CLI lanzan un agente del Claude Agent SDK que produce videos educativos infantiles de 60–65 s con estilo de recortes de papel. Cada serie la presenta un personaje (Lía, la niña del teatrito, es el primero) con su propio nicho, escenario, paleta y voz; la técnica de papel es común a todos. Todo corre en local salvo el propio agente: voz Kokoro, faster-whisper, `stage.html` renderizado con Playwright, y música y efectos sintetizados por código.
 
 El repositorio tiene dos partes que no hay que confundir:
 
@@ -32,9 +32,9 @@ Usa siempre `.venv/bin/python`, porque el `python3` del sistema no tiene Kokoro,
 
 | Ruta | Responsabilidad |
 |---|---|
-| `prompts/system_prompt.md` | Prompt del agente: pipeline de 12 pasos, estructura de 7 escenas, reglas de QA y de `publish.json`. Variables: `{{IDIOMA}}`, `{{TEMA}}`, `{{EDAD}}`, `{{SLUG}}`, `{{FORMATO}}`, `{{CTA}}`. |
-| `paper_stage/core.py` | `VideoRequest` y su validación, relleno del prompt, `run_agent()` (opciones del SDK, herramientas permitidas y entorno), sugerencia de temas, `slugify`/`topic_key`. |
-| `paper_stage/jobs.py` | `JobStore` (SQLite en `data/`) y `JobManager`: cola, concurrencia, cancelar, reanudar y eventos en vivo (SSE). |
+| `prompts/system_prompt.md` | Prompt del agente: pipeline de 12 pasos, estructura de 7 escenas, reglas de QA y de `publish.json`. Variables: `{{IDIOMA}}`, `{{TEMA}}`, `{{EDAD}}`, `{{SLUG}}`, `{{FORMATO}}`, `{{CTA}}` y las del personaje: `{{PERSONAJE}}`, `{{PERSONAJE_ID}}`, `{{NICHO}}`, `{{APARIENCIA}}`, `{{PERSONALIDAD}}`, `{{ESCENARIO}}`, `{{PALETA}}`, `{{VOZ}}`, `{{LANG_CODE}}`, `{{VOZ_ESTILO}}`, `{{SERIE}}`, `{{HASHTAG_SERIE}}`, `{{REFERENCIAS}}` y `{{GANCHOS_PREVIOS}}`. |
+| `paper_stage/core.py` | `Character` (personaje; `LIA` es el original), `VOICES`, `VideoRequest` y su validación, relleno del prompt, `run_agent()` (opciones del SDK, herramientas permitidas y entorno), sugerencia de temas y de personajes, `slugify`/`topic_key`. |
+| `paper_stage/jobs.py` | `JobStore` y `CharacterStore` (SQLite en `data/`) y `JobManager` (`prepare()` copia el personaje en la petición): cola, concurrencia, cancelar, reanudar y eventos en vivo (SSE). |
 | `paper_stage/library.py` | Lectura de `output/`: `STEPS` (paso → archivos que lo marcan como hecho), revisión automática de `final.mp4` (`verify`), portada y póster. |
 | `paper_stage/web.py` | Servidor Starlette y API; `TokenAuth` si hay `PAPER_STAGE_TOKEN`. |
 | `paper_stage/demo.py` | Agente simulado que escribe un video falso completo (para `--demo` y las pruebas). |
@@ -46,9 +46,10 @@ Variables de entorno útiles: `PAPER_STAGE_OUTPUT`, `PAPER_STAGE_DATA` (redirige
 ## Invariantes (no romper)
 
 - **Prompt ↔ app.** Si cambias los pasos o los archivos de salida en `system_prompt.md`, actualiza `STEPS` en `library.py`, los textos `KICKOFF`/`RESUME` de `core.py` y `demo.py` (que imita la salida real). Si añades una variable `{{X}}`, rellénala en `core.py`: una prueba verifica que no quede ninguna sin rellenar.
-- **Límites de publicación.** `MAX_HASHTAGS`, `MAX_SHORT_DESCRIPTION` y `MAX_TITLE` (`library.py`) deben coincidir con lo que exige §11 del prompt. Lo mismo vale para la duración (60–65 s), las resoluciones, 24 fps, H.264 `yuv420p`, AAC 48 kHz y −14 LUFS ±1.
+- **Límites de publicación.** `MAX_HASHTAGS`, `MAX_SHORT_DESCRIPTION` y `MAX_TITLE` (`library.py`) deben coincidir con lo que exige §11 del prompt, y `MAX_VOICE_START` y `MAX_HOOK_WORDS`, con el gancho de §2 y §7. Lo mismo vale para la duración (60–65 s), las resoluciones, 24 fps, H.264 `yuv420p`, AAC 48 kHz y −14 LUFS ±1.
 - **El agente trabaja en primer plano.** `AGENT_ENV` desactiva las tareas en segundo plano y `DISALLOWED_TOOLS` bloquea las de «esperar»: al cerrar el turno, el proceso de Claude Code mata lo que siga corriendo, como un render a medias. `agent_env()` pone el `.venv` al frente del `PATH` del agente; no lo quites.
 - **Seguridad.** El agente corre con `permission_mode="acceptEdits"` y con `Bash` sin confirmación. Fuera de `127.0.0.1`, la app exige token. No debilites esto.
+- **Personajes.** Al crear un trabajo, el personaje se copia en la petición (`VideoRequest.personaje`): editarlo después no cambia un video a medias. Los trabajos y videos sin personaje (anteriores a esta función) son de Lía (`LIA.id`). El agente escribe `"personaje"` en `script.json` y `publish.json`; la biblioteca agrupa por ese campo. Los temas no se repiten dentro de un personaje e idioma.
 - **Modelos.** Los IDs válidos están en `MODELS` (`core.py`); el modelo por defecto es `claude-opus-5-5`.
 - **Reanudar sin contar dos veces.** El costo y los turnos de una sesión reanudada no deben sumarse dos veces; hay una prueba para eso.
 

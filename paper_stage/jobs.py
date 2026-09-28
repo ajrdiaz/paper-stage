@@ -37,6 +37,74 @@ CREATE TABLE IF NOT EXISTS jobs (
 """
 
 
+CHARACTERS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS characters (
+    id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+)
+"""
+
+
+class CharacterStore:
+    """Personajes, en la misma base de datos que los trabajos. Si no hay ninguno, crea a
+    Lía: el estudio siempre tiene al menos un personaje con el que producir."""
+
+    def __init__(self, db: sqlite3.Connection):
+        self.db = db
+        self.db.execute(CHARACTERS_SCHEMA)
+        if not self.db.execute("SELECT 1 FROM characters LIMIT 1").fetchone():
+            self._save(core.Character.from_dict(core.LIA.to_dict()), insert=True)
+        self.db.commit()
+
+    def list(self) -> list[core.Character]:
+        rows = self.db.execute("SELECT data FROM characters ORDER BY created_at")
+        return [core.Character.from_dict(json.loads(data)) for (data,) in rows]
+
+    def get(self, character_id: str) -> core.Character | None:
+        row = self.db.execute("SELECT data FROM characters WHERE id = ?", [character_id]).fetchone()
+        return core.Character.from_dict(json.loads(row[0])) if row else None
+
+    def create(self, character: core.Character) -> core.Character:
+        character.validate()
+        taken = {c.id for c in self.list()}
+        base = core.slugify(character.nombre)[:40].strip("-") or "personaje"
+        character.id, n = base, 2
+        while character.id in taken:
+            character.id, n = f"{base}-{n}", n + 1
+        self._save(character, insert=True)
+        self.db.commit()
+        return character
+
+    def update(self, character_id: str, character: core.Character) -> core.Character:
+        if not self.get(character_id):
+            raise KeyError(character_id)
+        character.id = character_id
+        character.validate()
+        self._save(character, insert=False)
+        self.db.commit()
+        return character
+
+    def delete(self, character_id: str) -> None:
+        self.db.execute("DELETE FROM characters WHERE id = ?", [character_id])
+        self.db.commit()
+
+    def _save(self, character: core.Character, insert: bool) -> None:
+        data, now = json.dumps(character.to_dict(), ensure_ascii=False), time.time()
+        if insert:
+            self.db.execute("INSERT INTO characters (id, data, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                            [character.id, data, now, now])
+        else:
+            self.db.execute("UPDATE characters SET data = ?, updated_at = ? WHERE id = ?",
+                            [data, now, character.id])
+
+
+def request_character(req: dict) -> str:
+    """ID del personaje de una petición guardada (las anteriores a los personajes son de Lía)."""
+    return (req.get("personaje") or {}).get("id") or core.LIA.id
+
+
 class JobStore:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,6 +162,7 @@ class JobManager:
         self.events_dir = data_dir / "jobs"
         self.events_dir.mkdir(parents=True, exist_ok=True)
         self.store = JobStore(data_dir / "paper_stage.db")
+        self.characters = CharacterStore(self.store.db)
         self.runner = runner or core.run_agent
         self.concurrency = max(1, concurrency)
         self.queue: asyncio.Queue[str] = asyncio.Queue()
@@ -130,32 +199,51 @@ class JobManager:
 
     # ------------------------------------------------------------------ API pública
 
-    def used_topics(self, idioma: str | None = None) -> list[str]:
+    # Los temas no se repiten dentro de la serie de un personaje; otro personaje, con su
+    # propio nicho y su propio canal, sí puede tratar el mismo tema.
+
+    def used_topics(self, idioma: str | None = None, personaje: str | None = None) -> list[str]:
         """Temas ya producidos o en cola: los de los trabajos y los de output/ hechos desde
         la terminal (de estos solo se conoce el título)."""
         topics, slugs = [], set()
         for slug, req in self.store.requests():
             slugs.add(slug)
-            if idioma is None or req.get("idioma") == idioma:
+            if (idioma is None or req.get("idioma") == idioma) and \
+                    (personaje is None or request_character(req) == personaje):
                 topics.append(req["tema"])
         for video in library.list_videos():
-            if video["slug"] not in slugs and (idioma is None or video.get("idioma") in (None, idioma)):
+            if video["slug"] not in slugs and (idioma is None or video.get("idioma") in (None, idioma)) \
+                    and (personaje is None or video["personaje"] == personaje):
                 topics.append(video["title"])
         return list(dict.fromkeys(topics))
 
-    def is_used(self, tema: str, idioma: str) -> bool:
+    def is_used(self, tema: str, idioma: str, personaje: str = core.LIA.id) -> bool:
         key = core.topic_key(tema, idioma)
         requests = self.store.requests()
-        if any(core.topic_key(req["tema"], req.get("idioma", "es")) == key for _, req in requests):
+        if any(core.topic_key(req["tema"], req.get("idioma", "es")) == key
+               and request_character(req) == personaje for _, req in requests):
             return True
         # Hecho desde la terminal: su carpeta es el slug del tema.
         slug = core.slugify(f"{tema}-{idioma}")
-        return slug not in {s for s, _ in requests} and (core.OUTPUT_DIR / slug / "script.json").exists()
+        script = library.read_json(core.OUTPUT_DIR / slug / "script.json")
+        return (slug not in {s for s, _ in requests} and isinstance(script, dict)
+                and library.script_character(script) == personaje)
 
-    def create(self, req: core.VideoRequest) -> dict:
+    def prepare(self, req: core.VideoRequest, personaje: str | None = None) -> core.VideoRequest:
+        """Copia el personaje en la petición, busca sus videos anteriores y la valida."""
+        character = self.characters.get(personaje or core.LIA.id)
+        if not character:
+            raise ValueError(f"No existe el personaje «{personaje}».")
+        req.personaje = character.to_dict()
+        req.referencias = library.videos_of(character.id)
+        req.ganchos_previos = library.hooks_of(character.id)
         req.validate()
-        if self.is_used(req.tema, req.idioma):
-            raise ValueError(f"Ya hay un video sobre «{req.tema}» en este idioma. "
+        return req
+
+    def create(self, req: core.VideoRequest, personaje: str | None = None) -> dict:
+        self.prepare(req, personaje)
+        if self.is_used(req.tema, req.idioma, req.character.id):
+            raise ValueError(f"{req.character.nombre} ya tiene un video sobre «{req.tema}» en este idioma. "
                              "Los temas no se repiten: elige uno distinto.")
         req.slug = self._unique_slug(req.slug)
         job_id = uuid.uuid4().hex[:10]
@@ -214,6 +302,9 @@ class JobManager:
 
     def active_slugs(self) -> set[str]:
         return {j["slug"] for j in self.store.by_status("queued", "running")}
+
+    def active_characters(self) -> set[str]:
+        return {request_character(j["request"]) for j in self.store.by_status("queued", "running")}
 
     # ------------------------------------------------------------------ eventos
 

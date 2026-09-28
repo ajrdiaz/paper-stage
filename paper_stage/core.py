@@ -1,8 +1,8 @@
 """Lógica compartida por la CLI (run_agent.py) y la aplicación web.
 
-Carga prompts/system_prompt.md, reemplaza {{IDIOMA}}, {{TEMA}}, {{EDAD}},
-{{SLUG}} y {{FORMATO}}, y ejecuta el agente con el Claude Agent SDK,
-emitiendo eventos simples (texto, herramienta, resultado) para mostrar el progreso.
+Define los personajes (Character) y las peticiones de video (VideoRequest), carga
+prompts/system_prompt.md, reemplaza sus variables {{X}} y ejecuta el agente con el
+Claude Agent SDK, emitiendo eventos simples (texto, herramienta, resultado).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import re
 import shutil
 import sys
 import unicodedata
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
@@ -31,8 +31,19 @@ DEFAULT_MODEL = "claude-opus-5-5"
 MODELS = ["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5"]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 LANGUAGES = ["es", "en"]
-# Frase final que Lía dice en cada video; se puede cambiar por video.
+LANGUAGE_NAMES = {"es": "español", "en": "inglés"}
+# Frase final por defecto si el personaje no tiene una; se puede cambiar por video.
 DEFAULT_CTA = {"es": "¡Sígueme para aprender más!", "en": "Follow me to learn more!"}
+# Voces de Kokoro-82M por idioma del video (la primera letra del ID es su lang_code;
+# "f"/"m" en la segunda, femenina o masculina). En inglés, solo las americanas (§0 del prompt).
+VOICES = {
+    "es": ["ef_dora", "em_alex", "em_santa"],
+    "en": ["af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore", "af_nicole",
+           "af_nova", "af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric",
+           "am_fenrir", "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa"],
+}
+DEFAULT_VOICES = {"femenina": {"es": "ef_dora", "en": "af_heart"},
+                  "masculina": {"es": "em_alex", "en": "am_michael"}}
 FORMATS = ["vertical", "horizontal"]
 ALLOWED_TOOLS = ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"]
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
@@ -62,15 +73,16 @@ SUGGEST_MODEL = "claude-sonnet-5"
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 AGE_RE = re.compile(r"^\d{1,2}(-\d{1,2})?$")
+HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 KICKOFF = {
     "es": (
-        "Produce el video completo sobre «{tema}» para niños de {edad} años, "
+        "Produce el video completo de {personaje} sobre «{tema}» para niños de {edad} años, "
         "siguiendo el pipeline de principio a fin en output/{slug}/. "
         "No te detengas hasta tener final.mp4 y los dos QA hechos."
     ),
     "en": (
-        "Produce the full video about “{tema}” for kids aged {edad}, "
+        "Produce {personaje}'s full video about “{tema}” for kids aged {edad}, "
         "following the pipeline end to end in output/{slug}/. "
         "Do not stop until final.mp4 exists and both QA passes are done. "
         "(The system prompt is in Spanish; everything you produce must be in English.)"
@@ -91,11 +103,110 @@ RESUME = {
 }
 
 
+def _clean(text: object) -> str:
+    return " ".join(str(text or "").split())
+
+
+def _check_len(label: str, text: str, low: int, high: int) -> None:
+    if not low <= len(text) <= high:
+        raise ValueError(f"{label} debe tener entre {low} y {high} caracteres.")
+
+
+@dataclass
+class Character:
+    """Personaje que presenta una serie. La técnica (recortes de papel) es común a todos;
+    el personaje fija su aspecto, su voz, su escenario, su paleta y el nicho de sus videos."""
+
+    nombre: str
+    nicho: str
+    apariencia: str
+    personalidad: str
+    escenario: str
+    paleta: list[str]
+    idioma: str = "es"  # idioma principal: el de sus videos por defecto
+    edad: str = "6-9"
+    voces: dict = field(default_factory=lambda: dict(DEFAULT_VOICES["femenina"]))
+    voz_estilo: str = ""
+    serie: str = ""
+    cta: dict = field(default_factory=dict)  # frase final por idioma
+    id: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Character":
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    def validate(self) -> None:
+        for name in ("nombre", "nicho", "apariencia", "personalidad", "escenario", "voz_estilo", "serie"):
+            setattr(self, name, _clean(getattr(self, name)))
+        _check_len("El nombre", self.nombre, 2, 30)
+        _check_len("El nicho", self.nicho, 3, 120)
+        _check_len("La apariencia", self.apariencia, 20, 800)
+        _check_len("La personalidad", self.personalidad, 10, 400)
+        _check_len("El escenario", self.escenario, 10, 400)
+        _check_len("El estilo de voz", self.voz_estilo, 0, 200)
+        self.serie = self.serie or self.nombre
+        _check_len("El nombre de la serie", self.serie, 2, 40)
+        if self.idioma not in LANGUAGES:
+            raise ValueError(f"Idioma no válido: {self.idioma}")
+        if not AGE_RE.match(str(self.edad)):
+            raise ValueError("La edad debe ser un número o un rango como 6-9.")
+        if not isinstance(self.paleta, list) or not 3 <= len(self.paleta) <= 7 \
+                or not all(isinstance(c, str) and HEX_RE.match(c) for c in self.paleta):
+            raise ValueError("La paleta debe tener entre 3 y 7 colores en formato #RRGGBB.")
+        self.paleta = [c.upper() for c in self.paleta]
+        voces = self.voces if isinstance(self.voces, dict) else {}
+        for lang in LANGUAGES:
+            if voces.get(lang) not in VOICES[lang]:
+                raise ValueError(f"Voz no válida para {LANGUAGE_NAMES[lang]}: {voces.get(lang)}")
+        self.voces = {lang: voces[lang] for lang in LANGUAGES}
+        cta = self.cta if isinstance(self.cta, dict) else {}
+        self.cta = {lang: _clean(cta.get(lang)) for lang in LANGUAGES if _clean(cta.get(lang))}
+        if any(len(c) > 80 for c in self.cta.values()):
+            raise ValueError("La frase final (CTA) debe tener 80 caracteres como máximo.")
+
+    def cta_for(self, idioma: str) -> str:
+        return self.cta.get(idioma) or DEFAULT_CTA[idioma]
+
+    @property
+    def hashtag(self) -> str:
+        return "#" + slugify(self.serie).replace("-", "")
+
+
+# El personaje original de la serie. Los videos y trabajos anteriores a los personajes
+# (sin "personaje" en script.json o en la petición) son suyos.
+LIA = Character(
+    id="lia",
+    nombre="Lía",
+    nicho="Ciencia y curiosidades del mundo",
+    apariencia=(
+        "Una niña curiosa con pelo negro corte bob, un gancho amarillo en el pelo, ojos de punto, "
+        "una boquita redonda en \"o\", cachetes rosados circulares y un suéter teal con cuello blanco. "
+        "Sostiene un crayón azul y señala con él lo que explica."
+    ),
+    personalidad=(
+        "Curiosa, cálida y juguetona. Se asombra junto al público y explica con comparaciones "
+        "del día a día de un niño."
+    ),
+    escenario=(
+        "Un pequeño teatrito de títeres: cortinas de papel rosa coral a los lados, un borde de papel "
+        "kraft y un piso de escenario de madera abajo; al inicio y al final, fondo amarillo mostaza."
+    ),
+    paleta=["#E9B949", "#E8736B", "#3FA796", "#F3E9D2", "#C9A57A", "#1E2A4F", "#4B3B7A"],
+    voz_estilo="narradora joven, cálida y curiosa, suave (tono un poco más juvenil)",
+    serie="Teatrito de Papel",
+    cta=dict(DEFAULT_CTA),
+)
+
+
 @dataclass
 class VideoRequest:
     tema: str
-    edad: str = "6-9"
-    idioma: str = "es"
+    edad: str = ""     # vacío: la del personaje
+    idioma: str = ""   # vacío: el idioma principal del personaje
     formato: str = "vertical"
     slug: str = ""
     model: str = DEFAULT_MODEL
@@ -104,8 +215,24 @@ class VideoRequest:
     max_budget_usd: float | None = None
     cta: str = ""
     extra: dict = field(default_factory=dict)
+    # Copia del personaje al crear el trabajo: editarlo después no cambia un video a medias.
+    personaje: dict = field(default_factory=dict)
+    # Videos terminados del mismo personaje, para que el agente copie su diseño.
+    referencias: list[str] = field(default_factory=list)
+    # Ganchos de sus videos anteriores, para que no repita la misma apertura.
+    ganchos_previos: list[str] = field(default_factory=list)
+
+    @property
+    def character(self) -> Character:
+        return Character.from_dict(self.personaje or LIA.to_dict())
 
     def validate(self) -> None:
+        character = self.character
+        if self.personaje:
+            character.validate()
+            self.personaje = character.to_dict()
+        self.edad = str(self.edad or character.edad)
+        self.idioma = self.idioma or character.idioma
         self.tema = " ".join(self.tema.split())
         if not 2 <= len(self.tema) <= 200:
             raise ValueError("El tema debe tener entre 2 y 200 caracteres.")
@@ -123,7 +250,7 @@ class VideoRequest:
             raise ValueError("max_turns debe estar entre 10 y 2000.")
         if self.max_budget_usd is not None and not 0.5 <= float(self.max_budget_usd) <= 1000:
             raise ValueError("El tope de gasto debe estar entre 0.5 y 1000 USD.")
-        self.cta = " ".join(self.cta.split()) or DEFAULT_CTA[self.idioma]
+        self.cta = " ".join(self.cta.split()) or character.cta_for(self.idioma)
         if len(self.cta) > 80:
             raise ValueError("La frase final (CTA) debe tener 80 caracteres como máximo.")
         self.slug = slugify(self.slug or f"{self.tema}-{self.idioma}")
@@ -133,14 +260,45 @@ class VideoRequest:
         return OUTPUT_DIR / self.slug
 
     def variables(self) -> dict[str, str]:
+        character = self.character
+        voz = character.voces.get(self.idioma) or DEFAULT_VOICES["femenina"][self.idioma]
         return {
             "IDIOMA": self.idioma,
             "TEMA": self.tema,
             "EDAD": self.edad,
             "SLUG": self.slug,
             "FORMATO": self.formato,
-            "CTA": self.cta or DEFAULT_CTA[self.idioma],
+            "CTA": self.cta or character.cta_for(self.idioma),
+            "PERSONAJE": character.nombre,
+            "PERSONAJE_ID": character.id or "personaje",
+            "NICHO": character.nicho,
+            "APARIENCIA": character.apariencia,
+            "PERSONALIDAD": character.personalidad,
+            "ESCENARIO": character.escenario,
+            "PALETA": ", ".join(f"`{c}`" for c in character.paleta),
+            "VOZ": voz,
+            "LANG_CODE": voz[0],
+            "VOZ_ESTILO": character.voz_estilo or "voz cálida y expresiva",
+            "SERIE": character.serie or character.nombre,
+            "HASHTAG_SERIE": character.hashtag,
+            "REFERENCIAS": self._references_text(character),
+            "GANCHOS_PREVIOS": "\n".join(f"- {g}" for g in self.ganchos_previos) or "- (ninguno todavía)",
         }
+
+    def _references_text(self, character: Character) -> str:
+        # El agente tiende a copiar el último video de output/: si es de otro personaje,
+        # acabaría dibujando a ese otro personaje.
+        others = ("No copies el personaje ni el escenario de videos de otros personajes de `output/`; "
+                  "de ellos solo puedes reutilizar las herramientas técnicas (voz, sincronía, audio, "
+                  "render y QA).")
+        if self.referencias:
+            dirs = ", ".join(f"`output/{slug}/`" for slug in self.referencias)
+            return (f"Ya hay videos de {character.nombre}: {dirs}. Antes de dibujar, abre su `stage.html` "
+                    f"(y `tools/`, si existe) y reutiliza tal cual el diseño de {character.nombre} y de su "
+                    f"escenario: la serie depende de que se vea siempre igual. {others}")
+        return (f"Este es el primer video de {character.nombre}: todavía no tiene dibujo. Diséñalo a partir "
+                f"de la ficha del §3, en piezas reutilizables (un grupo SVG o una función para el personaje "
+                f"y otro para el escenario), porque los siguientes videos lo copiarán. {others}")
 
 
 def slugify(text: str) -> str:
@@ -163,16 +321,35 @@ SUGGEST_PROMPT = {
 }
 
 
-async def suggest_topics(idioma: str, edad: str, pista: str, used: list[str], n: int) -> list[dict]:
-    """Pide a Claude n ideas de tema [{"tema", "gancho"}]. Quien llama descarta las repetidas."""
+async def _ask_json_list(prompt: str) -> list:
+    """Una respuesta corta de Claude, sin herramientas, que debe ser una lista JSON."""
     from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, TextBlock, query
 
+    options = ClaudeAgentOptions(model=SUGGEST_MODEL, tools=[], max_turns=1, setting_sources=[],
+                                 cwd=str(ROOT))
+    text = ""
+    async for message in query(prompt=prompt, options=options):
+        if isinstance(message, AssistantMessage):
+            text += "".join(b.text for b in message.content if isinstance(b, TextBlock))
+    match = re.search(r"\[.*\]", text, re.S)
+    try:
+        items = json.loads(match.group(0)) if match else []
+    except ValueError:
+        items = []
+    return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+
+
+async def suggest_topics(character: Character, idioma: str, edad: str, pista: str,
+                         used: list[str], n: int) -> list[dict]:
+    """Pide a Claude n ideas de tema del nicho del personaje [{"tema", "gancho"}].
+    Quien llama descarta las repetidas."""
     lines = [
-        "Eres el guionista de «Teatrito de Papel»: videos de 60 segundos con recortes de papel en los "
-        f"que la niña Lía explica ciencia, naturaleza y curiosidades a niños de {edad} años.",
+        f"Eres el guionista de «{character.serie}»: videos de 60 segundos con recortes de papel en los "
+        f"que {character.nombre} ({character.personalidad}) explica a niños de {edad} años temas de "
+        f"este nicho: {character.nicho}.",
         SUGGEST_PROMPT[idioma].format(n=n),
         "Cada tema es una pregunta curiosa de 60 caracteres como máximo, que se pueda explicar y "
-        "animar en un minuto. Que sean variados entre sí (distintas áreas).",
+        "animar en un minuto. Todos dentro del nicho, pero variados entre sí.",
     ]
     if pista:
         lines.append(f"Deben tratar sobre: {pista}")
@@ -181,19 +358,69 @@ async def suggest_topics(idioma: str, edad: str, pista: str, used: list[str], n:
                      "pero nunca uno igual:\n" + "\n".join(f"- {t}" for t in used))
     lines.append('Responde solo con JSON, sin texto alrededor: [{"tema": "...", "gancho": "una frase corta (15 palabras como máximo) '
                  'sobre por qué le engancha a un niño"}]')
-    options = ClaudeAgentOptions(model=SUGGEST_MODEL, tools=[], max_turns=1, setting_sources=[],
-                                 cwd=str(ROOT))
-    text = ""
-    async for message in query(prompt="\n\n".join(lines), options=options):
-        if isinstance(message, AssistantMessage):
-            text += "".join(b.text for b in message.content if isinstance(b, TextBlock))
-    match = re.search(r"\[.*\]", text, re.S)
-    try:
-        items = json.loads(match.group(0)) if match else []
-    except ValueError:
-        items = []
-    return [{"tema": " ".join(str(i["tema"]).split()), "gancho": str(i.get("gancho") or "").strip()}
-            for i in items if isinstance(i, dict) and str(i.get("tema") or "").strip()]
+    items = await _ask_json_list("\n\n".join(lines))
+    return [{"tema": _clean(i["tema"]), "gancho": str(i.get("gancho") or "").strip()}
+            for i in items if _clean(i.get("tema"))]
+
+
+CHARACTER_PROMPT = """Eres el director creativo de un estudio que produce series de videos cortos (60 s) para niños de {edad} años, animados con recortes de papel (gouache, crayón, bordes rasgados, stop-motion). Cada serie tiene un personaje original que presenta todos sus videos desde un escenario fijo, y un nicho concreto: todos los videos del canal tratan de ese nicho.
+
+Propón {n} personajes muy distintos entre sí (especie o tipo, nicho, escenario y colores), para videos en {lengua}.{pista}
+
+Reglas:
+- Personajes originales: nada parecido a personajes, marcas o mascotas con copyright.
+- Amables y sin miedo, violencia ni burlas.
+- Diseño simple que se pueda recortar en papel (formas grandes, pocos detalles), con ojos y una boca visibles que se puedan animar al hablar, y un objeto característico con el que señala.
+- Nicho concreto, con temas para al menos 50 videos de un minuto: no «ciencia» en general, sino, por ejemplo, «animales del océano profundo» o «cómo funcionan las cosas de la cocina».
+- El escenario es un lugar fijo hecho de papel (un teatrito, un barco, un laboratorio, una casa en un árbol…) que abre y cierra cada video.{evitar}
+
+Responde solo con JSON, sin texto alrededor:
+[{{"nombre": "nombre corto y fácil de pronunciar en español y en inglés",
+  "nicho": "el nicho, en {lengua} (60 caracteres como máximo)",
+  "gancho": "por qué engancha a los niños (15 palabras como máximo, en español)",
+  "apariencia": "descripción visual para el animador: forma, colores, ropa, rasgos y objeto característico (40 a 90 palabras, en español)",
+  "personalidad": "cómo es y cómo habla (20 a 50 palabras, en español)",
+  "escenario": "el escenario fijo, construido en papel (20 a 50 palabras, en español)",
+  "paleta": ["#RRGGBB", "5 colores: 3 de base y 2 de acento, con al menos uno oscuro para la franja de subtítulos"],
+  "voz": "femenina o masculina",
+  "voz_estilo": "cómo suena su voz (20 palabras como máximo, en español)",
+  "serie": "nombre de la serie, en {lengua} (30 caracteres como máximo)",
+  "cta_es": "frase final en español, 60 caracteres como máximo, del tipo «¡Sígueme para…!»",
+  "cta_en": "la misma frase en inglés"}}]"""
+
+
+def character_from_idea(idea: dict, idioma: str, edad: str) -> Character:
+    """Convierte una idea de personaje (de Claude o del modo demo) en un Character válido."""
+    gender = "masculina" if "masc" in str(idea.get("voz") or "").lower() else "femenina"
+    character = Character(
+        nombre=_clean(idea.get("nombre")), nicho=_clean(idea.get("nicho")),
+        apariencia=_clean(idea.get("apariencia")), personalidad=_clean(idea.get("personalidad")),
+        escenario=_clean(idea.get("escenario")),
+        paleta=[str(c) for c in idea.get("paleta") or [] if HEX_RE.match(str(c))][:7],
+        idioma=idioma, edad=edad, voces=dict(DEFAULT_VOICES[gender]),
+        voz_estilo=_clean(idea.get("voz_estilo"))[:200], serie=_clean(idea.get("serie"))[:40],
+        cta={"es": _clean(idea.get("cta_es"))[:80], "en": _clean(idea.get("cta_en"))[:80]},
+    )
+    character.validate()
+    return character
+
+
+async def suggest_characters(idioma: str, edad: str, pista: str, avoid: list[str], n: int) -> list[dict]:
+    """Pide a Claude n ideas de personaje. Devuelve [{"gancho", "personaje": {...}}] ya validados."""
+    prompt = CHARACTER_PROMPT.format(
+        edad=edad, n=n, lengua=LANGUAGE_NAMES[idioma],
+        pista=f"\n\nEl usuario quiere algo sobre: {pista}" if pista else "",
+        evitar=("\n- Ya existen estos personajes; no repitas su nombre ni su nicho:\n"
+                + "\n".join(f"  - {a}" for a in avoid)) if avoid else "",
+    )
+    ideas = []
+    for item in await _ask_json_list(prompt):
+        try:
+            character = character_from_idea(item, idioma, edad)
+        except (ValueError, TypeError):
+            continue  # una idea incompleta del modelo no tumba las demás
+        ideas.append({"gancho": _clean(item.get("gancho")), "personaje": character.to_dict()})
+    return ideas
 
 
 def render_prompt(variables: dict[str, str]) -> str:
@@ -208,7 +435,7 @@ def render_prompt(variables: dict[str, str]) -> str:
 
 def kickoff_prompt(req: VideoRequest, resume: bool = False) -> str:
     template = (RESUME if resume else KICKOFF)[req.idioma]
-    return template.format(tema=req.tema, edad=req.edad, slug=req.slug)
+    return template.format(tema=req.tema, edad=req.edad, slug=req.slug, personaje=req.character.nombre)
 
 
 # --------------------------------------------------------------------------- #

@@ -20,7 +20,7 @@ os.environ["PAPER_STAGE_DEMO_DELAY"] = "0.01"
 
 from starlette.testclient import TestClient  # noqa: E402
 
-from paper_stage import core  # noqa: E402
+from paper_stage import core, library  # noqa: E402
 from paper_stage.demo import run_demo  # noqa: E402
 from paper_stage.jobs import JobManager  # noqa: E402
 from paper_stage.web import create_app  # noqa: E402
@@ -34,6 +34,17 @@ async def slow_runner(req, *, resume_session=None, continuing=False, on_stderr=N
         return
     on_stderr and on_stderr("arrancando CLI")
     await asyncio.sleep(30)
+
+
+CORAL = {
+    "nombre": "Coral", "nicho": "Animales del océano profundo", "idioma": "en", "edad": "4-6",
+    "apariencia": "Una pulpita lila de papel con casco de buzo y una linterna amarilla en un tentáculo.",
+    "personalidad": "Valiente y curiosa, habla en susurros emocionados.",
+    "escenario": "Un submarino de papel con ojo de buey redondo.",
+    "paleta": ["#2b4c7e", "#6FB7B7", "#B58BD6", "#12213D"],
+    "voces": {"es": "ef_dora", "en": "af_sky"}, "voz_estilo": "juvenil y susurrada",
+    "serie": "Coral Under the Sea", "cta": {"en": "Follow me to dive deeper!"},
+}
 
 
 def wait_for(client, job_id, statuses, timeout=30):
@@ -74,6 +85,47 @@ class CoreTests(unittest.TestCase):
         self.assertIn('"¡Nos vemos pronto!"', core.render_prompt(req.variables()))
         with self.assertRaises(ValueError):
             core.VideoRequest(tema="Volcanes", cta="x" * 81).validate()
+
+    def test_default_character_is_lia(self):
+        req = core.VideoRequest(tema="Volcanes")
+        req.validate()
+        self.assertEqual((req.idioma, req.edad, req.character.id), ("es", "6-9", "lia"))
+        prompt = core.render_prompt(req.variables())
+        self.assertIn("presentado por **Lía**", prompt)
+        self.assertIn("Kokoro `ef_dora` (lang_code `e`)", prompt)
+        self.assertIn('"serie": "Teatrito de Papel"', prompt)
+        self.assertIn("#teatritodepapel", prompt)
+        self.assertIn("primer video de Lía", prompt)
+
+    def test_custom_character_prompt(self):
+        character = core.Character(**CORAL)
+        character.id = "coral"
+        character.validate()
+        req = core.VideoRequest(tema="Why do anglerfish glow?", personaje=character.to_dict(),
+                                referencias=["old-coral-video-en"])
+        req.validate()
+        # Toma el idioma, la edad y la frase final del personaje.
+        self.assertEqual((req.idioma, req.edad, req.cta), ("en", "4-6", "Follow me to dive deeper!"))
+        prompt = core.render_prompt(req.variables())
+        self.assertNotIn("Lía", prompt)
+        self.assertNotIn("{{", prompt)
+        for text in ("presentado por **Coral**", "Animales del océano profundo", "Kokoro `af_sky` (lang_code `a`)",
+                     "`#2B4C7E`", "#coralunderthesea", '"personaje": "coral"', "`output/old-coral-video-en/`",
+                     "Un submarino de papel"):
+            self.assertIn(text, prompt)
+        self.assertIn("Produce Coral's full video", core.kickoff_prompt(req))
+
+    def test_script_character(self):
+        self.assertEqual(library.script_character({}), "lia")               # anterior a los personajes
+        self.assertEqual(library.script_character({"personaje": "Lía"}), "lia")  # nombre en vez de ID
+        self.assertEqual(library.script_character({"personaje": "coral-2"}), "coral-2")
+
+    def test_character_validation(self):
+        for bad in (dict(paleta=["#FFF", "#000000", "#123456"]), dict(paleta=["#000000"] * 2),
+                    dict(voces={"es": "af_heart", "en": "af_sky"}), dict(nicho="x"),
+                    dict(idioma="fr"), dict(cta={"es": "x" * 81})):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                core.Character(**{**CORAL, **bad}).validate()
 
     def test_resumed_cost_is_not_counted_twice(self):
         def result(cost, out, session="s1"):
@@ -122,6 +174,8 @@ class AppTests(unittest.TestCase):
                 self.assertFalse(detail["verify"]["ok"])
                 self.assertFalse(checks["Resolución"])
                 self.assertTrue(checks["5 hashtags"])
+                self.assertTrue(checks["La voz empieza en ≤0.3 s"])  # la voz demo arranca a 0.2 s
+                self.assertTrue(checks["Gancho escrito de 6 palabras como máximo"])
             self.assertEqual(client.get("/files/los-delfines-es/stage.html").status_code, 200)
             self.assertEqual(client.get("/files/los-delfines-es/../../data/paper_stage.db").status_code, 404)
             self.assertEqual(client.get("/files/los-delfines-es/agent_log.jsonl").status_code, 404)
@@ -194,11 +248,70 @@ class AppTests(unittest.TestCase):
             self.assertEqual(len(set(keys)), 6)
             self.assertNotIn(core.topic_key("¿Por qué el mar es salado?", "es"), keys)
 
+    def test_characters(self):
+        with self.make_client(data="data-characters") as client:
+            chars = client.get("/api/characters").json()
+            self.assertEqual([c["id"] for c in chars], ["lia"])  # siempre hay al menos a Lía
+
+            ideas = client.post("/api/characters/suggest", json={"idioma": "es", "edad": "6-9"}).json()["personajes"]
+            self.assertEqual(len(ideas), 3)
+            again = client.post("/api/characters/suggest", json={
+                "idioma": "es", "edad": "6-9",
+                "evitar": [f"{i['personaje']['nombre']} ({i['personaje']['nicho']})" for i in ideas]})
+            names = {i["personaje"]["nombre"] for i in ideas}
+            self.assertFalse(names & {i["personaje"]["nombre"] for i in again.json().get("personajes", [])})
+
+            self.assertEqual(client.post("/api/characters", json={**CORAL, "paleta": ["#123"]}).status_code, 400)
+            self.assertEqual(client.post("/api/characters", json={"nombre": "Solo nombre"}).status_code, 400)
+            res = client.post("/api/characters", json=CORAL)
+            self.assertEqual(res.status_code, 201, res.text)
+            coral = res.json()
+            self.assertEqual((coral["id"], coral["hashtag"]), ("coral", "#coralunderthesea"))
+            self.assertEqual(client.post("/api/characters", json=CORAL).json()["id"], "coral-2")
+
+            res = client.post("/api/prompt-preview", json={"tema": "Anglerfish", "personaje_id": "coral"})
+            self.assertIn("presentado por **Coral**", res.json()["prompt"])
+            self.assertEqual(res.json()["slug"], "anglerfish-en")
+            self.assertEqual(client.post("/api/prompt-preview", json={"tema": "X y", "personaje_id": "nadie"}).status_code, 400)
+
+            topics = client.post("/api/suggest", json={"personaje_id": "coral"})
+            self.assertEqual(topics.status_code, 200, topics.text)
+
+            # El video lleva el personaje y su idioma; el mismo tema no se repite en su serie,
+            # pero otro personaje sí puede tratarlo.
+            job = client.post("/api/jobs", json={"tema": "Las medusas", "personaje_id": "coral"}).json()
+            self.assertEqual(job["request"]["personaje"]["nombre"], "Coral")
+            self.assertEqual(client.delete("/api/characters/coral").status_code, 409)  # en producción
+            job = wait_for(client, job["id"], {"done", "failed"})
+            self.assertEqual(job["status"], "done", job["error"])
+            video = client.get(f"/api/videos/{job['slug']}").json()
+            self.assertEqual((video["personaje"], video["idioma"]), ("coral", "en"))
+            self.assertIn("Coral", video["texts"]["bible.md"])
+            self.assertEqual(client.post("/api/jobs", json={"tema": "las medusas", "personaje_id": "coral"}).status_code, 400)
+            lia = client.post("/api/jobs", json={"tema": "Las medusas", "idioma": "en"})
+            self.assertEqual(lia.status_code, 201, lia.text)
+            wait_for(client, lia.json()["id"], {"done", "failed"})
+
+            # Su segundo video copia el diseño del primero y ve su gancho, para no repetir la apertura.
+            res = client.post("/api/prompt-preview", json={"tema": "Octopus ink", "personaje_id": "coral"})
+            self.assertIn(f"`output/{job['slug']}/`", res.json()["prompt"])
+            self.assertIn("- pregunta imposible: Did you know that Las medusas", res.json()["prompt"])
+            self.assertIn("- (ninguno todavía)", client.post("/api/prompt-preview", json={
+                "tema": "Otro tema", "personaje_id": "coral-2"}).json()["prompt"])
+
+            listed = {c["id"]: c for c in client.get("/api/characters").json()}
+            self.assertEqual((listed["coral"]["videos"], listed["coral"]["ultimo_video"]), (1, job["slug"]))
+            res = client.put("/api/characters/coral", json={**CORAL, "nicho": "Criaturas del arrecife"})
+            self.assertEqual(res.json()["nicho"], "Criaturas del arrecife")
+            self.assertEqual(client.put("/api/characters/nadie", json=CORAL).status_code, 404)
+            self.assertEqual(client.delete("/api/characters/coral-2").status_code, 200)
+            self.assertEqual(client.get("/api/characters/coral-2").status_code, 404)
+
     def test_prompt_preview_and_errors(self):
         with self.make_client(data="data-preview") as client:
             res = client.post("/api/prompt-preview", json={"tema": "El arcoíris", "idioma": "en"})
             self.assertEqual(res.json()["slug"], "el-arcoiris-en")
-            self.assertIn("Produce the full video", res.json()["kickoff"])
+            self.assertIn("full video about “El arcoíris”", res.json()["kickoff"])
             self.assertEqual(client.post("/api/jobs", json={"tema": ""}).status_code, 400)
             self.assertEqual(client.post("/api/jobs", content=b"no-json").status_code, 400)
 

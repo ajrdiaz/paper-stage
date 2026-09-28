@@ -16,8 +16,10 @@ const ACTIVE = new Set(["queued", "running"]);
 const LANG = { es: "Español", en: "English" };
 const PREFS_KEY = "paper-stage:prefs";
 const MAX_HASHTAGS = 5; // límite de TikTok
+const AGES = ["3-5", "4-6", "6-9", "8-11", "10-12"];
 
 let CONFIG = null;
+let CHARACTERS = [];       // personajes; cada vista que los usa los vuelve a cargar
 let cleanup = [];          // funciones a ejecutar al cambiar de vista
 const watched = new Map(); // job id → estado conocido (para avisos al terminar)
 
@@ -80,6 +82,36 @@ function savePrefs(prefs) {
 }
 
 function onCleanup(fn) { cleanup.push(fn); }
+
+/* ------------------------------------------------------------------ personajes (datos) */
+
+async function loadCharacters() {
+  CHARACTERS = await api("/api/characters");
+  return CHARACTERS;
+}
+const charById = id => CHARACTERS.find(c => c.id === id);
+// Los trabajos anteriores a los personajes no guardan ninguno: son de Lía.
+const reqCharacter = req => req?.personaje?.id ? req.personaje : { id: CONFIG.default_character, nombre: "Lía" };
+const charName = id => charById(id)?.nombre || (id === CONFIG.default_character ? "Lía" : id);
+const voiceLabel = v => `${v} · ${v[1] === "m" ? "masculina" : "femenina"}`;
+const ctaKey = (pid, lang) => `cta_${pid}_${lang}`;
+
+function savedCta(pid, lang) {
+  const prefs = loadPrefs();
+  // Antes de los personajes, la frase se guardaba solo por idioma (y era de Lía).
+  return prefs[ctaKey(pid, lang)] ?? (pid === CONFIG.default_character ? prefs[`cta_${lang}`] : "") ?? "";
+}
+
+function swatches(paleta) {
+  return `<span class="swatches" aria-hidden="true">${(paleta || []).map(c => `<i style="background:${esc(c)}"></i>`).join("")}</span>`;
+}
+
+// Portada de un personaje sin videos: sus colores en tiras de papel y su inicial.
+function charArt(c) {
+  const [a = "#E9B949", b = "#E8736B", d = "#3FA796"] = c.paleta || [];
+  return `<span class="char-art" style="background:linear-gradient(160deg, ${esc(a)} 0 45%, ${esc(b)} 45% 72%, ${esc(d)} 72%)">
+    <span>${esc((c.nombre || "?").slice(0, 1))}</span></span>`;
+}
 
 function poll(fn, ms) {
   let stopped = false, timer = null;
@@ -234,6 +266,7 @@ function jobRow(job) {
       ${ACTIVE.has(job.status) || job.steps_done ? `<div class="bar" aria-hidden="true"><i style="width:${pct}%"></i></div>` : ""}
       <span class="meta">
         <span class="pill lang">${esc((req.idioma || "").toUpperCase())}</span>
+        <span>${esc(reqCharacter(req).nombre)}</span>
         <span>${esc(req.formato === "horizontal" ? "16:9" : "9:16")}</span>
         <span>${job.steps_done}/${job.steps_total} pasos ${extra}</span>
         ${job.cost_usd ? `<span>${fmtCost(job.cost_usd)}</span>` : ""}
@@ -244,20 +277,27 @@ function jobRow(job) {
 
 /* ------------------------------------------------------------------ vista: estudio */
 
-function studioForm(prefill = {}) {
-  const prefs = { edad: "6-9", idioma: "es", formato: "vertical", model: CONFIG.default_model, effort: "high", ...loadPrefs(), ...prefill };
-  const ages = ["3-5", "4-6", "6-9", "8-11", "10-12"];
+function studioForm(prefs) {
+  const ages = [...AGES];
   if (!ages.includes(prefs.edad)) ages.push(prefs.edad);
   return `
   <form id="new-video" class="card stack" novalidate>
     <div class="row"><h2>Nuevo video</h2><span class="spacer"></span>
       <label class="row small muted"><input type="checkbox" id="batch-toggle"> Varios temas</label></div>
+    <div class="field">
+      <div class="row"><span class="label">Personaje</span><span class="spacer"></span>
+        <a class="small" href="#/personajes/nuevo">+ Crear personaje</a></div>
+      <div class="char-picker" role="radiogroup" aria-label="Personaje">
+        ${CHARACTERS.map(c => `<label class="char-chip"><input type="radio" name="personaje_id" value="${esc(c.id)}" ${prefs.personaje_id === c.id ? "checked" : ""}>
+          <span>${swatches(c.paleta)}<strong>${esc(c.nombre)}</strong><span class="small muted">${esc(c.nicho)}</span></span></label>`).join("")}
+      </div>
+    </div>
     <div class="field" id="single-field">
       <div class="row"><label for="tema">Tema</label><span class="spacer"></span>
         <button type="button" class="btn small" id="suggest-open" aria-expanded="false" aria-controls="suggest-panel">Sugerir 3 temas</button></div>
       <input id="tema" name="tema" type="text" class="tema-input" maxlength="200" autocomplete="off"
-        placeholder="Ej.: ¿Por qué el cielo es azul?" value="${esc(prefill.tema || "")}">
-      <span class="hint">Escríbelo en el idioma del video. El agente investiga, escribe el guion, anima y renderiza 60–65 s. Los temas no se repiten.</span>
+        placeholder="Ej.: ¿Por qué el cielo es azul?" value="${esc(prefs.tema || "")}">
+      <span class="hint">Escríbelo en el idioma del video. El agente investiga, escribe el guion, anima y renderiza 60–65 s. Los temas no se repiten dentro de la serie de cada personaje.</span>
       <div id="suggest-panel" class="suggest-panel hidden">
         <div class="row">
           <input id="pista" type="text" maxlength="120" autocomplete="off" aria-label="Sobre qué (opcional)" placeholder="Sobre qué (opcional): animales, espacio…">
@@ -292,9 +332,8 @@ function studioForm(prefill = {}) {
     </div>
     <div class="field">
       <label for="cta">Frase final (CTA)</label>
-      <input id="cta" name="cta" type="text" maxlength="80" autocomplete="off"
-        placeholder="${esc(CONFIG.default_cta[prefs.idioma] || "")}" value="${esc(prefs[`cta_${prefs.idioma}`] || "")}">
-      <span class="hint">Lía la dice al final de cada video. Déjala vacía para usar la de siempre. Se recuerda por idioma.</span>
+      <input id="cta" name="cta" type="text" maxlength="80" autocomplete="off">
+      <span class="hint" id="cta-hint"></span>
     </div>
     <details class="advanced">
       <summary>Opciones del agente</summary>
@@ -323,21 +362,34 @@ function studioForm(prefill = {}) {
 
 function readForm(form) {
   const data = Object.fromEntries(new FormData(form).entries());
-  const prefs = { edad: data.edad, idioma: data.idioma, formato: data.formato, model: data.model, effort: data.effort,
-                  max_turns: data.max_turns, max_budget_usd: data.max_budget_usd || null };
+  const prefs = { personaje_id: data.personaje_id, edad: data.edad, idioma: data.idioma, formato: data.formato,
+                  model: data.model, effort: data.effort, max_turns: data.max_turns, max_budget_usd: data.max_budget_usd || null };
   const cta = (data.cta || "").trim();
-  savePrefs({ ...loadPrefs(), ...prefs, [`cta_${data.idioma}`]: cta });
+  savePrefs({ ...loadPrefs(), ...prefs, [ctaKey(data.personaje_id, data.idioma)]: cta });
   return { ...prefs, cta, max_turns: Number(data.max_turns) || 400, max_budget_usd: data.max_budget_usd ? Number(data.max_budget_usd) : null };
 }
 
+function studioIntro(c) {
+  return c ? `Escribe un tema y ${esc(c.nombre)} lo convierte en un video de papel de un minuto. Su nicho: <strong>${esc(c.nicho)}</strong>.` : "";
+}
+
 async function renderStudio(params) {
-  const prefill = { tema: params.get("tema") || "" };
-  for (const key of ["idioma", "formato", "edad"]) if (params.get(key)) prefill[key] = params.get(key);
+  await loadCharacters();
+  const saved = loadPrefs();
+  const prefs = { edad: "6-9", idioma: "es", formato: "vertical", model: CONFIG.default_model, effort: "high", ...saved,
+                  tema: params.get("tema") || "" };
+  const asked = params.get("personaje");
+  if (asked && charById(asked)) prefs.personaje_id = asked;
+  if (!charById(prefs.personaje_id)) prefs.personaje_id = charById(CONFIG.default_character) ? CONFIG.default_character : CHARACTERS[0]?.id;
+  // Al elegir otro personaje (o llegar desde su ficha), el video toma su idioma y su edad.
+  const chosen = charById(prefs.personaje_id);
+  if (chosen && (asked || saved.personaje_id !== prefs.personaje_id)) Object.assign(prefs, { idioma: chosen.idioma, edad: chosen.edad });
+  for (const key of ["idioma", "formato", "edad"]) if (params.get(key)) prefs[key] = params.get(key);
   view.innerHTML = `
     <div class="page-head"><div><h1>Estudio</h1>
-      <p>Escribe un tema y Lía lo convierte en un video de papel de un minuto.</p></div></div>
+      <p id="studio-intro">${studioIntro(chosen)}</p></div></div>
     <div class="grid-studio">
-      ${studioForm(prefill)}
+      ${studioForm(prefs)}
       <section class="card stack" aria-labelledby="queue-title">
         <div class="row"><h2 id="queue-title">En producción</h2><span class="spacer"></span>
           <span class="small muted">${CONFIG.concurrency} a la vez</span></div>
@@ -355,15 +407,17 @@ async function renderStudio(params) {
     $("#submit").textContent = batch.checked ? "Poner en cola" : "Producir video";
   });
 
-  // Sugerencias: 3 temas nuevos cada vez; los ya mostrados no vuelven a salir.
+  const current = () => { const d = new FormData(form); return { pid: d.get("personaje_id"), lang: d.get("idioma") }; };
+
+  // Sugerencias: 3 temas nuevos del nicho del personaje; los ya mostrados no vuelven a salir.
   let shown = [];
   const list = $("#suggest-list");
   async function suggest() {
-    const { idioma, edad } = Object.fromEntries(new FormData(form).entries());
-    list.innerHTML = `<p class="small muted">Lía está pensando temas…</p>`;
+    const { idioma, edad, personaje_id } = Object.fromEntries(new FormData(form).entries());
+    list.innerHTML = `<p class="small muted">${esc(charById(personaje_id)?.nombre || "El personaje")} está pensando temas…</p>`;
     $("#suggest-more").disabled = true;
     try {
-      const res = await api("/api/suggest", { method: "POST", body: { idioma, edad, pista: $("#pista").value, evitar: shown } });
+      const res = await api("/api/suggest", { method: "POST", body: { idioma, edad, personaje_id, pista: $("#pista").value, evitar: shown } });
       shown.push(...res.temas.map(t => t.tema));
       list.innerHTML = res.temas.map(t => `
         <button type="button" class="suggestion" role="radio" aria-checked="false" data-tema="${esc(t.tema)}">
@@ -380,16 +434,36 @@ async function renderStudio(params) {
   });
   $("#suggest-more").addEventListener("click", suggest);
   $("#pista").addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); suggest(); } });
-  // La frase final se recuerda por idioma: al cambiarlo, guarda la actual y trae la del otro.
-  let ctaLang = new FormData(form).get("idioma");
-  $$("input[name=idioma]", form).forEach(r => r.addEventListener("change", () => {
-    savePrefs({ ...loadPrefs(), [`cta_${ctaLang}`]: $("#cta").value.trim() });
-    ctaLang = r.value;
-    $("#cta").value = loadPrefs()[`cta_${ctaLang}`] || "";
-    $("#cta").placeholder = CONFIG.default_cta[ctaLang] || "";
+  // La frase final se recuerda por personaje e idioma: al cambiar uno de los dos,
+  // guarda la actual y trae la que corresponda (vacía = la del personaje).
+  let ctaCtx = current();
+  const showCta = () => {
+    const c = charById(ctaCtx.pid);
+    $("#cta").value = savedCta(ctaCtx.pid, ctaCtx.lang);
+    $("#cta").placeholder = c?.cta?.[ctaCtx.lang] || CONFIG.default_cta[ctaCtx.lang] || "";
+    $("#cta-hint").textContent = `${c?.nombre || "El personaje"} la dice al final de cada video. Déjala vacía para usar la suya. Se recuerda por personaje e idioma.`;
+  };
+  const syncCta = () => {
+    savePrefs({ ...loadPrefs(), [ctaKey(ctaCtx.pid, ctaCtx.lang)]: $("#cta").value.trim() });
+    ctaCtx = current();
+    showCta();
+  };
+  showCta();
+  // Las sugerencias anteriores ya no sirven con otro idioma u otro personaje.
+  const resetSuggestions = () => { shown = []; list.innerHTML = ""; if (!$("#suggest-panel").classList.contains("hidden")) suggest(); };
+  $$("input[name=idioma]", form).forEach(r => r.addEventListener("change", () => { syncCta(); resetSuggestions(); }));
+  $$("input[name=personaje_id]", form).forEach(r => r.addEventListener("change", () => {
+    const c = charById(r.value);
+    if (!c) return;
+    const lang = $(`input[name=idioma][value="${c.idioma}"]`, form);
+    if (lang) lang.checked = true;
+    const edad = $("#edad");
+    if (![...edad.options].some(o => o.value === c.edad)) edad.add(new Option(`${c.edad} años`, c.edad));
+    edad.value = c.edad;
+    $("#studio-intro").innerHTML = studioIntro(c);
+    syncCta();
+    resetSuggestions();
   }));
-  // Al cambiar de idioma, las sugerencias anteriores ya no sirven.
-  $$("input[name=idioma]", form).forEach(r => r.addEventListener("change", () => { shown = []; list.innerHTML = ""; if (!$("#suggest-panel").classList.contains("hidden")) suggest(); }));
   list.addEventListener("click", ev => {
     const pick = ev.target.closest(".suggestion");
     if (!pick) return;
@@ -451,7 +525,7 @@ async function renderJob(jobId) {
   view.innerHTML = `
     <div class="page-head">
       <div><p class="small"><a href="#/">← Estudio</a></p><h1>${esc(req.tema)}</h1>
-        <p>${esc(LANG[req.idioma])} · ${req.formato === "horizontal" ? "16:9" : "9:16"} · ${esc(req.edad)} años · ${esc(req.model)} (${esc(req.effort)}) · <code>output/${esc(job.slug)}/</code></p></div>
+        <p>${esc(reqCharacter(req).nombre)} · ${esc(LANG[req.idioma])} · ${req.formato === "horizontal" ? "16:9" : "9:16"} · ${esc(req.edad)} años · ${esc(req.model)} (${esc(req.effort)}) · <code>output/${esc(job.slug)}/</code></p></div>
       <div class="row" id="job-actions"></div>
     </div>
     <div class="stack">
@@ -496,7 +570,7 @@ async function renderJob(jobId) {
     }
     if (j.status === "done") {
       const other = req.idioma === "es" ? "en" : "es";
-      actions.push(`<a class="btn" href="#/?tema=${encodeURIComponent(req.tema)}&idioma=${other}&formato=${req.formato}&edad=${encodeURIComponent(req.edad)}">Versión en ${LANG[other]}</a>`);
+      actions.push(`<a class="btn" href="#/?tema=${encodeURIComponent(req.tema)}&personaje=${encodeURIComponent(reqCharacter(req).id)}&idioma=${other}&formato=${req.formato}&edad=${encodeURIComponent(req.edad)}">Versión en ${LANG[other]}</a>`);
     }
     $("#job-actions").innerHTML = actions.join("");
   }
@@ -550,14 +624,20 @@ async function renderJob(jobId) {
 
 /* ------------------------------------------------------------------ vista: biblioteca */
 
-async function renderLibrary() {
+async function renderLibrary(params) {
+  const [videos] = await Promise.all([api("/api/videos"), loadCharacters()]);
+  const who = params.get("personaje") || "";
   view.innerHTML = `
     <div class="page-head"><div><h1>Biblioteca</h1><p>Todos los videos en <code>output/</code>, también los hechos desde la terminal.</p></div>
-      <input type="text" class="search" id="search" placeholder="Buscar…" aria-label="Buscar videos"></div>
+      <div class="row">
+        <select id="lib-char" class="search" aria-label="Personaje"><option value="">Todos los personajes</option>
+          ${CHARACTERS.map(c => `<option value="${esc(c.id)}" ${who === c.id ? "selected" : ""}>${esc(c.nombre)}</option>`).join("")}</select>
+        <input type="text" class="search" id="search" placeholder="Buscar…" aria-label="Buscar videos"></div></div>
     <div id="gallery" class="gallery"></div>`;
-  const videos = await api("/api/videos");
-  const draw = filter => {
-    const list = videos.filter(v => !filter || `${v.title} ${v.slug} ${v.gancho || ""}`.toLowerCase().includes(filter));
+  const draw = () => {
+    const filter = $("#search").value.trim().toLowerCase(), pid = $("#lib-char").value;
+    const list = videos.filter(v => (!pid || v.personaje === pid)
+      && (!filter || `${v.title} ${v.slug} ${v.gancho || ""} ${charName(v.personaje)}`.toLowerCase().includes(filter)));
     $("#gallery").innerHTML = list.length ? list.map(v => `
       <a class="vcard" href="#/video/${esc(v.slug)}">
         <div class="thumb">${v.has_video ? `<img src="/poster/${esc(v.slug)}.jpg" alt="" loading="lazy" onerror="this.remove()">` : ""}
@@ -566,6 +646,7 @@ async function renderLibrary() {
         <div class="body"><strong>${esc(v.title)}</strong>
           <div class="row small">
             ${v.idioma ? `<span class="pill lang">${esc(v.idioma.toUpperCase())}</span>` : ""}
+            <span class="muted">${esc(charName(v.personaje))}</span>
             ${v.has_video ? `<span class="pill done">Video listo</span>` : `<span class="pill">${v.steps_done}/${v.steps_total} pasos</span>`}
             ${v.qa ? `<span class="pill plain ${v.qa.failed ? "failed" : "done"}">QA ${v.qa.passed}/${v.qa.total}</span>` : ""}
             ${v.verify && !v.verify.ok ? `<span class="pill plain failed" title="La revisión automática encontró problemas">Revisar</span>` : ""}
@@ -573,8 +654,9 @@ async function renderLibrary() {
       </a>`).join("")
       : `<div class="card empty" style="grid-column:1/-1"><span class="big">${filter ? "Sin resultados" : "Aún no hay videos"}</span>${filter ? "" : `<a href="#/">Produce el primero</a>`}</div>`;
   };
-  draw("");
-  $("#search").addEventListener("input", e => draw(e.target.value.trim().toLowerCase()));
+  draw();
+  $("#search").addEventListener("input", draw);
+  $("#lib-char").addEventListener("change", draw);
 }
 
 /* ------------------------------------------------------------------ vista previa interactiva */
@@ -644,7 +726,7 @@ function stagePreview(container, v) {
 
 async function renderVideo(slug) {
   let v;
-  try { v = await api(`/api/videos/${encodeURIComponent(slug)}`); }
+  try { [v] = await Promise.all([api(`/api/videos/${encodeURIComponent(slug)}`), loadCharacters()]); }
   catch (err) { view.innerHTML = `<div class="card empty"><span class="big">No encontré ese video</span>${esc(err.message)}</div>`; return; }
   const script = v.json["script.json"] || {};
   const publish = v.json["publish.json"] || {};
@@ -652,6 +734,7 @@ async function renderVideo(slug) {
   const running = v.jobs.find(j => ACTIVE.has(j.status));
   const req = lastJob?.request || { tema: v.title, idioma: v.idioma || "es", formato: v.formato || "vertical", edad: "6-9" };
   const other = (v.idioma || req.idioma) === "es" ? "en" : "es";
+  const who = `personaje=${encodeURIComponent(v.personaje)}`;
 
   const tabs = [];
   if (publish.titulos || publish.descripcion || publish.descripcion_corta) tabs.push(["publish", "Publicación"]);
@@ -665,11 +748,11 @@ async function renderVideo(slug) {
   view.innerHTML = `
     <div class="page-head">
       <div><p class="small"><a href="#/biblioteca">← Biblioteca</a></p><h1>${esc(v.title)}</h1>
-        <p>${v.duration ? `${v.duration.toFixed(1)} s · ` : ""}${esc(LANG[v.idioma] || "")} · <code>output/${esc(v.slug)}/</code></p></div>
+        <p>${esc(charName(v.personaje))} · ${v.duration ? `${v.duration.toFixed(1)} s · ` : ""}${esc(LANG[v.idioma] || "")} · <code>output/${esc(v.slug)}/</code></p></div>
       <div class="row">
         ${running ? `<a class="btn" href="#/trabajo/${esc(running.id)}">Ver producción en curso</a>` : ""}
         ${!running && lastJob && lastJob.status !== "done" ? `<a class="btn primary" href="#/trabajo/${esc(lastJob.id)}">Continuar producción</a>` : ""}
-        <a class="btn" href="#/?tema=${encodeURIComponent(req.tema)}&idioma=${other}&formato=${esc(req.formato)}&edad=${encodeURIComponent(req.edad)}">Versión en ${LANG[other]}</a>
+        <a class="btn" href="#/?tema=${encodeURIComponent(req.tema)}&${who}&idioma=${other}&formato=${esc(req.formato)}&edad=${encodeURIComponent(req.edad)}">Versión en ${LANG[other]}</a>
         <button class="btn danger" id="delete-video" ${running ? "disabled" : ""}>Borrar</button>
       </div>
     </div>
@@ -713,10 +796,11 @@ async function renderVideo(slug) {
             ${publish.texto_portada ? `<p class="small muted">“${esc(publish.texto_portada)}” sobre el fotograma de ${esc(publish.frame_portada_s)} s</p>` : ""}</div></div>` : ""}
         ${publish.hecho_para_ninos ? `<p class="small muted">Marcar como «Hecho para niños»</p>` : ""}
         ${(publish.ideas_siguientes || []).length ? `<h3>Ideas para los siguientes videos</h3><div class="chips">${publish.ideas_siguientes.map(i =>
-          `<a class="chip" href="#/?tema=${encodeURIComponent(i)}&idioma=${esc(v.idioma || "es")}&formato=${esc(req.formato)}&edad=${encodeURIComponent(req.edad)}">+ ${esc(i)}</a>`).join("")}</div>` : ""}
+          `<a class="chip" href="#/?tema=${encodeURIComponent(i)}&${who}&idioma=${esc(v.idioma || "es")}&formato=${esc(req.formato)}&edad=${encodeURIComponent(req.edad)}">+ ${esc(i)}</a>`).join("")}</div>` : ""}
       </div>`,
     script: () => `
-      ${script.gancho ? `<p><strong>Gancho:</strong> ${esc(script.gancho)}</p>` : ""}
+      ${script.gancho ? `<p><strong>Gancho${script.tipo_gancho ? ` (${esc(script.tipo_gancho)})` : ""}:</strong> ${esc(script.gancho)}</p>` : ""}
+      ${script.texto_gancho ? `<p class="small muted">Escrito en pantalla desde el frame 1: «${esc(script.texto_gancho)}»</p>` : ""}
       ${script.bucle_abierto ? `<p class="small muted">Bucle abierto: ${esc(script.bucle_abierto)}</p>` : ""}
       ${(script.escenas || []).map(s => `
         <div class="scene"><span class="n">${esc(s.n)}</span><div>
@@ -763,6 +847,234 @@ function copyRow(text) {
   return `<div class="copy-row"><span>${esc(text)}</span><button class="btn small" data-copy="${esc(text)}">Copiar</button></div>`;
 }
 
+/* ------------------------------------------------------------------ vista: personajes */
+
+async function renderCharacters() {
+  await loadCharacters();
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Personajes</h1>
+      <p>Cada personaje presenta su propia serie, con su nicho, su escenario, su paleta y su voz. Todos sus videos giran alrededor de su nicho.</p></div>
+      <a class="btn primary" href="#/personajes/nuevo">Crear personaje</a></div>
+    <div class="gallery chars">${CHARACTERS.map(c => `
+      <article class="vcard char-card">
+        <a class="thumb" href="#/personajes/${esc(c.id)}" aria-label="Editar a ${esc(c.nombre)}">
+          ${charArt(c)}
+          ${c.ultimo_video ? `<img src="/poster/${esc(c.ultimo_video)}.jpg" alt="" loading="lazy" onerror="this.remove()">` : ""}</a>
+        <div class="body">
+          <strong>${esc(c.nombre)}</strong>
+          <span class="small">${esc(c.nicho)}</span>
+          ${swatches(c.paleta)}
+          <div class="row small"><span class="pill lang">${esc(c.idioma.toUpperCase())}</span>
+            <span class="muted">${esc(c.edad)} años · ${c.videos === 1 ? "1 video" : `${c.videos} videos`}</span></div>
+          <div class="row">
+            <a class="btn small primary" href="#/?personaje=${encodeURIComponent(c.id)}">Producir video</a>
+            ${c.videos ? `<a class="btn small" href="#/biblioteca?personaje=${encodeURIComponent(c.id)}">Videos</a>` : ""}
+            <a class="btn small" href="#/personajes/${encodeURIComponent(c.id)}">Editar</a>
+          </div>
+        </div>
+      </article>`).join("")}</div>`;
+}
+
+function characterForm(c, isNew) {
+  const ages = [...AGES];
+  if (!ages.includes(c.edad)) ages.push(c.edad);
+  const voiceSelect = lang => `<select id="voz-${lang}" name="voz_${lang}">${CONFIG.voices[lang].map(v =>
+    `<option value="${v}" ${c.voces?.[lang] === v ? "selected" : ""}>${voiceLabel(v)}</option>`).join("")}</select>`;
+  return `
+  <form id="char-form" class="card stack" novalidate>
+    <h2>${isNew ? "2. Ficha del personaje" : "Ficha del personaje"}</h2>
+    <div class="fields-2">
+      <div class="field"><label for="c-nombre">Nombre</label>
+        <input id="c-nombre" name="nombre" type="text" maxlength="30" autocomplete="off" value="${esc(c.nombre || "")}"></div>
+      <div class="field"><label for="c-serie">Nombre de la serie</label>
+        <input id="c-serie" name="serie" type="text" maxlength="40" autocomplete="off" value="${esc(c.serie || "")}" placeholder="Por defecto, el del personaje">
+        <span class="hint">Va en la publicación y en su hashtag fijo.</span></div>
+    </div>
+    <div class="field"><label for="c-nicho">Nicho</label>
+      <input id="c-nicho" name="nicho" type="text" maxlength="120" autocomplete="off" value="${esc(c.nicho || "")}" placeholder="Ej.: Animales del océano profundo">
+      <span class="hint">Concreto: todos sus videos y las sugerencias de temas serán de esto. «Dinosaurios y fósiles», no «ciencia».</span></div>
+    <div class="fields-2">
+      <div class="field"><span class="label">Idioma principal</span>
+        <div class="segmented" role="radiogroup" aria-label="Idioma principal">
+          ${CONFIG.languages.map(l => `<label><input type="radio" name="idioma" value="${l}" ${c.idioma === l ? "checked" : ""}><span>${LANG[l]}</span></label>`).join("")}
+        </div>
+        <span class="hint">El de sus videos por defecto; siempre puedes hacer la versión en el otro.</span></div>
+      <div class="field"><label for="c-edad">Edad del público</label>
+        <select id="c-edad" name="edad">${ages.map(a => `<option value="${a}" ${c.edad === a ? "selected" : ""}>${a} años</option>`).join("")}</select></div>
+    </div>
+    <div class="field"><label for="c-apariencia">Apariencia</label>
+      <textarea id="c-apariencia" name="apariencia" maxlength="800">${esc(c.apariencia || "")}</textarea>
+      <span class="hint">Formas simples que se puedan recortar en papel, ojos y boca visibles (la boca se anima al hablar) y un objeto con el que señala.</span></div>
+    <div class="fields-2">
+      <div class="field"><label for="c-personalidad">Personalidad</label>
+        <textarea id="c-personalidad" name="personalidad" maxlength="400" rows="3">${esc(c.personalidad || "")}</textarea>
+        <span class="hint">Cómo es y cómo habla.</span></div>
+      <div class="field"><label for="c-escenario">Escenario</label>
+        <textarea id="c-escenario" name="escenario" maxlength="400" rows="3">${esc(c.escenario || "")}</textarea>
+        <span class="hint">El lugar fijo, de papel, que abre y cierra cada video.</span></div>
+    </div>
+    <div class="field"><span class="label">Paleta</span>
+      <div class="palette-editor" id="palette"></div>
+      <span class="hint">De 3 a 7 colores. Incluye uno oscuro: será el fondo de los subtítulos.</span></div>
+    <div class="fields-2">
+      <div class="field"><label for="voz-es">Voz en español</label>${voiceSelect("es")}</div>
+      <div class="field"><label for="voz-en">Voz en inglés</label>${voiceSelect("en")}</div>
+    </div>
+    <div class="field"><label for="c-voz-estilo">Cómo suena</label>
+      <input id="c-voz-estilo" name="voz_estilo" type="text" maxlength="200" autocomplete="off" value="${esc(c.voz_estilo || "")}" placeholder="Ej.: juvenil, curiosa y un poco susurrada"></div>
+    <div class="fields-2">
+      <div class="field"><label for="c-cta-es">Frase final en español</label>
+        <input id="c-cta-es" name="cta_es" type="text" maxlength="80" autocomplete="off" value="${esc(c.cta?.es || "")}" placeholder="${esc(CONFIG.default_cta.es)}"></div>
+      <div class="field"><label for="c-cta-en">Frase final en inglés</label>
+        <input id="c-cta-en" name="cta_en" type="text" maxlength="80" autocomplete="off" value="${esc(c.cta?.en || "")}" placeholder="${esc(CONFIG.default_cta.en)}"></div>
+    </div>
+    <p id="char-error" class="small" style="color:var(--warn)" role="alert"></p>
+    <div class="row">
+      ${isNew ? "" : `<button type="button" class="btn danger" id="char-delete">Borrar personaje</button>`}
+      <span class="spacer"></span>
+      <button type="submit" class="btn primary" id="char-save">${isNew ? "Crear y producir su primer video" : "Guardar cambios"}</button>
+    </div>
+  </form>`;
+}
+
+async function renderCharacterEditor(id) {
+  await loadCharacters();
+  const isNew = !id;
+  const existing = isNew ? null : charById(id);
+  if (!isNew && !existing) {
+    view.innerHTML = `<div class="card empty"><span class="big">No encontré ese personaje</span><a href="#/personajes">Ver personajes</a></div>`;
+    return;
+  }
+  const prefs = loadPrefs();
+  const blank = { idioma: prefs.idioma || "es", edad: prefs.edad || "6-9", voces: { es: "ef_dora", en: "af_heart" }, cta: {},
+                  paleta: ["#E9B949", "#E8736B", "#3FA796", "#F3E9D2", "#1E2A4F"] };
+  let palette = [...(existing || blank).paleta];
+  view.innerHTML = `
+    <div class="page-head"><div><p class="small"><a href="#/personajes">← Personajes</a></p>
+      <h1>${isNew ? "Nuevo personaje" : esc(existing.nombre)}</h1>
+      <p>${isNew ? "Elige una idea para empezar y ajústala, o rellena la ficha desde cero. El nicho define de qué tratarán todos sus videos."
+        : "Los cambios valen para los próximos videos: los que ya están en producción siguen con la ficha con la que empezaron."}</p></div></div>
+    <div class="stack">
+      ${isNew ? `<section class="card stack" aria-labelledby="ideas-title">
+        <div class="row"><h2 id="ideas-title">1. Ideas</h2><span class="spacer"></span>
+          <span class="small muted">Cada idea trae su nicho, su escenario, su paleta y su voz</span></div>
+        <div class="fields-3 ideas-controls">
+          <div class="field"><span class="label">Idioma</span>
+            <div class="segmented" role="radiogroup" aria-label="Idioma de las ideas">
+              ${CONFIG.languages.map(l => `<label><input type="radio" name="idea_idioma" value="${l}" ${blank.idioma === l ? "checked" : ""}><span>${LANG[l]}</span></label>`).join("")}
+            </div></div>
+          <div class="field"><label for="idea-edad">Edad del público</label>
+            <select id="idea-edad">${AGES.map(a => `<option value="${a}" ${blank.edad === a ? "selected" : ""}>${a} años</option>`).join("")}</select></div>
+          <div class="field"><label for="idea-pista">Sobre qué (opcional)</label>
+            <input id="idea-pista" type="text" maxlength="160" autocomplete="off" placeholder="Dinosaurios, cocina, emociones…"></div>
+        </div>
+        <div class="row"><button type="button" class="btn primary" id="ideas-go">Proponer 3 personajes</button>
+          <span class="small muted" id="ideas-note"></span></div>
+        <div id="ideas" class="ideas" role="radiogroup" aria-label="Personajes propuestos" aria-live="polite"></div>
+      </section>` : ""}
+      ${characterForm(existing || blank, isNew)}
+    </div>`;
+
+  const form = $("#char-form");
+  const drawPalette = () => {
+    $("#palette").innerHTML = palette.map((c, i) => `
+      <span class="swatch-input"><input type="color" value="${esc(c.toLowerCase())}" data-i="${i}" aria-label="Color ${i + 1}">
+        ${palette.length > 3 ? `<button type="button" class="icon-btn" data-remove="${i}" aria-label="Quitar color ${i + 1}">✕</button>` : ""}</span>`).join("")
+      + (palette.length < 7 ? `<button type="button" class="btn small" id="palette-add">+ Color</button>` : "");
+  };
+  drawPalette();
+  $("#palette").addEventListener("input", e => { if (e.target.dataset.i) palette[Number(e.target.dataset.i)] = e.target.value.toUpperCase(); });
+  $("#palette").addEventListener("click", e => {
+    const rm = e.target.closest("[data-remove]");
+    if (rm) { palette.splice(Number(rm.dataset.remove), 1); drawPalette(); }
+    if (e.target.id === "palette-add") { palette.push("#C9A57A"); drawPalette(); }
+  });
+
+  const fill = c => {
+    const set = (name, value) => { const el = form.elements[name]; if (el) el.value = value ?? ""; };
+    ["nombre", "serie", "nicho", "apariencia", "personalidad", "escenario", "voz_estilo"].forEach(k => set(k, c[k]));
+    set("cta_es", c.cta?.es); set("cta_en", c.cta?.en);
+    set("voz_es", c.voces?.es); set("voz_en", c.voces?.en);
+    const lang = $(`input[name=idioma][value="${c.idioma}"]`, form);
+    if (lang) lang.checked = true;
+    const edad = $("#c-edad");
+    if (![...edad.options].some(o => o.value === c.edad)) edad.add(new Option(`${c.edad} años`, c.edad));
+    edad.value = c.edad;
+    palette = [...c.paleta];
+    drawPalette();
+  };
+
+  if (isNew) {
+    // Ideas: 3 cada vez; las ya mostradas (y los personajes existentes) no se repiten.
+    let ideas = [], shown = [];
+    const box = $("#ideas");
+    const propose = async () => {
+      const idioma = $("input[name=idea_idioma]:checked").value, edad = $("#idea-edad").value;
+      $("#ideas-go").disabled = true;
+      box.innerHTML = `<p class="small muted">Pensando personajes…</p>`;
+      try {
+        const res = await api("/api/characters/suggest", { method: "POST", body: { idioma, edad, pista: $("#idea-pista").value, evitar: shown } });
+        ideas = res.personajes;
+        shown.push(...ideas.map(i => `${i.personaje.nombre} (${i.personaje.nicho})`));
+        box.innerHTML = ideas.map((idea, i) => {
+          const c = idea.personaje;
+          return `<button type="button" class="suggestion idea" role="radio" aria-checked="false" data-i="${i}">
+            ${charArt(c)}
+            <span class="idea-body"><strong>${esc(c.nombre)}</strong><span class="small">${esc(c.nicho)}</span>
+              ${idea.gancho ? `<span class="small muted">${esc(idea.gancho)}</span>` : ""}
+              <span class="small muted clamp">${esc(c.apariencia)}</span>${swatches(c.paleta)}</span></button>`;
+        }).join("");
+        $("#ideas-go").textContent = "Otros 3";
+        $("#ideas-note").textContent = "Elige una para rellenar la ficha; luego puedes cambiar lo que quieras.";
+      } catch (err) {
+        box.innerHTML = `<p class="small" style="color:var(--warn)">${esc(err.message)}</p>`;
+      } finally { $("#ideas-go").disabled = false; }
+    };
+    $("#ideas-go").addEventListener("click", propose);
+    $("#idea-pista").addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); propose(); } });
+    box.addEventListener("click", ev => {
+      const pick = ev.target.closest(".idea");
+      if (!pick) return;
+      $$(".idea", box).forEach(b => b.setAttribute("aria-checked", b === pick));
+      fill(ideas[Number(pick.dataset.i)].personaje);
+      $("#char-error").textContent = "";
+    });
+  }
+
+  form.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const d = Object.fromEntries(new FormData(form).entries());
+    const body = {
+      nombre: d.nombre, serie: d.serie, nicho: d.nicho, idioma: d.idioma, edad: d.edad,
+      apariencia: d.apariencia, personalidad: d.personalidad, escenario: d.escenario,
+      paleta: palette, voces: { es: d.voz_es, en: d.voz_en }, voz_estilo: d.voz_estilo,
+      cta: { es: d.cta_es, en: d.cta_en },
+    };
+    $("#char-save").disabled = true;
+    $("#char-error").textContent = "";
+    try {
+      const saved = isNew
+        ? await api("/api/characters", { method: "POST", body })
+        : await api(`/api/characters/${encodeURIComponent(existing.id)}`, { method: "PUT", body });
+      toast(isNew ? `${esc(saved.nombre)} ya está en el estudio. Elige el tema de su primer video.` : "Cambios guardados.", "ok");
+      location.hash = isNew ? `#/?personaje=${encodeURIComponent(saved.id)}` : "#/personajes";
+    } catch (err) {
+      $("#char-error").textContent = err.message;
+    } finally { $("#char-save").disabled = false; }
+  });
+
+  $("#char-delete")?.addEventListener("click", async () => {
+    const extra = existing.videos ? ` Sus ${existing.videos} video(s) se conservan en la biblioteca.` : "";
+    if (!confirmAction(`¿Borrar a ${existing.nombre}?${extra}`)) return;
+    try {
+      await api(`/api/characters/${encodeURIComponent(existing.id)}`, { method: "DELETE" });
+      toast("Personaje borrado.", "ok");
+      location.hash = "#/personajes";
+    } catch (err) { toast(esc(err.message), "err"); }
+  });
+  if (isNew) $("#ideas-go").focus();
+}
+
 /* ------------------------------------------------------------------ vista: sistema */
 
 async function renderSystem() {
@@ -799,12 +1111,16 @@ async function route() {
   const [path, query = ""] = location.hash.replace(/^#/, "").split("?");
   const parts = path.split("/").filter(Boolean);
   const params = new URLSearchParams(query);
-  const section = parts[0] === "biblioteca" || parts[0] === "video" ? "library" : parts[0] === "sistema" ? "system" : "studio";
+  const section = parts[0] === "biblioteca" || parts[0] === "video" ? "library" : parts[0] === "sistema" ? "system"
+    : parts[0] === "personajes" ? "characters" : "studio";
   $$("[data-nav]").forEach(a => (a.dataset.nav === section ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
   try {
     if (parts[0] === "trabajo" && parts[1]) await renderJob(decodeURIComponent(parts[1]));
     else if (parts[0] === "video" && parts[1]) await renderVideo(decodeURIComponent(parts[1]));
-    else if (parts[0] === "biblioteca") await renderLibrary();
+    else if (parts[0] === "personajes" && parts[1] === "nuevo") await renderCharacterEditor(null);
+    else if (parts[0] === "personajes" && parts[1]) await renderCharacterEditor(decodeURIComponent(parts[1]));
+    else if (parts[0] === "personajes") await renderCharacters();
+    else if (parts[0] === "biblioteca") await renderLibrary(params);
     else if (parts[0] === "sistema") await renderSystem();
     else await renderStudio(params);
   } catch (err) {

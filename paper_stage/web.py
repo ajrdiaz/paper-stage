@@ -30,7 +30,8 @@ def _error(message: str, status: int = 400) -> JSONResponse:
 
 
 def _request_from(payload: dict) -> core.VideoRequest:
-    allowed = {f.name for f in fields(core.VideoRequest)} - {"slug", "extra"}
+    # El personaje llega como personaje_id y lo copia el gestor (prepare), nunca el cliente.
+    allowed = {f.name for f in fields(core.VideoRequest)} - {"slug", "extra", "personaje", "referencias"}
     data = {k: v for k, v in payload.items() if k in allowed and v not in (None, "")}
     if "max_turns" in data:
         data["max_turns"] = int(data["max_turns"])
@@ -39,6 +40,15 @@ def _request_from(payload: dict) -> core.VideoRequest:
     if not data.get("tema"):
         raise ValueError("Escribe un tema.")
     return core.VideoRequest(**data)
+
+
+def _character_from(payload: dict) -> core.Character:
+    allowed = {f.name for f in fields(core.Character)} - {"id"}
+    try:
+        return core.Character(**{k: v for k, v in payload.items() if k in allowed})
+    except TypeError:
+        raise ValueError("Faltan datos del personaje: nombre, nicho, apariencia, personalidad, "
+                         "escenario y paleta.")
 
 
 async def _json(request: Request) -> dict:
@@ -74,7 +84,7 @@ class TokenAuth(BaseHTTPMiddleware):
 
 
 def create_app(manager: JobManager | None = None, token: str | None = None,
-               suggester: Callable | None = None) -> Starlette:
+               suggester: Callable | None = None, character_suggester: Callable | None = None) -> Starlette:
     if manager is None:
         runner = None
         if os.environ.get("PAPER_STAGE_DEMO") == "1":
@@ -91,6 +101,11 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             from .demo import suggest_demo as suggester
         else:
             suggester = core.suggest_topics
+    if character_suggester is None:
+        if demo:
+            from .demo import suggest_characters_demo as character_suggester
+        else:
+            character_suggester = core.suggest_characters
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -105,6 +120,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             "models": core.MODELS, "default_model": core.DEFAULT_MODEL,
             "efforts": core.EFFORTS, "languages": core.LANGUAGES, "formats": core.FORMATS,
             "demo": demo, "concurrency": manager.concurrency, "default_cta": core.DEFAULT_CTA,
+            "voices": core.VOICES, "default_character": core.LIA.id,
         })
 
     async def health(request: Request):
@@ -112,24 +128,29 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
 
     async def prompt_preview(request: Request):
         try:
-            req = _request_from(await _json(request))
-            req.validate()
+            payload = await _json(request)
+            req = manager.prepare(_request_from(payload), payload.get("personaje_id"))
             return JSONResponse({"slug": req.slug, "prompt": core.render_prompt(req.variables()),
                                  "kickoff": core.kickoff_prompt(req)})
         except (ValueError, TypeError) as exc:
             return _error(str(exc))
 
     async def suggest(request: Request):
-        """3 temas nuevos: ni ya producidos o en cola, ni entre los que ya se mostraron."""
+        """3 temas nuevos del nicho del personaje: ni ya producidos o en cola por él, ni entre
+        los que ya se mostraron."""
         payload = await _json(request)
-        idioma, edad = payload.get("idioma") or "es", str(payload.get("edad") or "6-9")
+        character = manager.characters.get(payload.get("personaje_id") or core.LIA.id)
+        if not character:
+            return _error("Personaje no encontrado.", 404)
+        idioma = payload.get("idioma") or character.idioma
+        edad = str(payload.get("edad") or character.edad)
         if idioma not in core.LANGUAGES or not core.AGE_RE.match(edad):
             return _error("Idioma o edad no válidos.")
         pista = " ".join(str(payload.get("pista") or "").split())[:120]
         shown = [" ".join(str(t).split()) for t in (payload.get("evitar") or [])][:60]
-        used = await asyncio.to_thread(manager.used_topics, idioma)
+        used = await asyncio.to_thread(manager.used_topics, idioma, character.id)
         try:
-            ideas = await suggester(idioma, edad, pista, used + shown, 6)
+            ideas = await suggester(character, idioma, edad, pista, used + shown, 6)
         except Exception as exc:  # noqa: BLE001 — credenciales, red o respuesta rara del modelo
             return _error(f"No se pudieron sugerir temas: {exc}", 502)
         taken = {core.topic_key(t, idioma) for t in used + shown}
@@ -138,7 +159,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             key = core.topic_key(idea["tema"], idioma)
             if key in taken or not 2 <= len(idea["tema"]) <= 200:
                 continue
-            if await asyncio.to_thread(manager.is_used, idea["tema"], idioma):
+            if await asyncio.to_thread(manager.is_used, idea["tema"], idioma, character.id):
                 continue
             taken.add(key)
             picked.append(idea)
@@ -148,6 +169,79 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             return _error("No salieron temas nuevos. Prueba otra vez o cambia la pista.", 502)
         return JSONResponse({"temas": picked})
 
+    # ------------------------------------------------------------------ personajes
+
+    def _character_json(character: core.Character, videos: list[dict]) -> dict:
+        mine = [v for v in videos if v["personaje"] == character.id]
+        done = [v for v in mine if v["has_video"]]
+        return {**character.to_dict(), "hashtag": character.hashtag, "videos": len(mine),
+                "ultimo_video": done[0]["slug"] if done else None}
+
+    async def list_characters(request: Request):
+        videos = await asyncio.to_thread(library.list_videos)
+        return JSONResponse([_character_json(c, videos) for c in manager.characters.list()])
+
+    async def get_character(request: Request):
+        character = manager.characters.get(request.path_params["character_id"])
+        if not character:
+            return _error("Personaje no encontrado.", 404)
+        return JSONResponse(_character_json(character, await asyncio.to_thread(library.list_videos)))
+
+    async def create_character(request: Request):
+        try:
+            character = manager.characters.create(_character_from(await _json(request)))
+        except ValueError as exc:
+            return _error(str(exc))
+        return JSONResponse(_character_json(character, []), status_code=201)
+
+    async def update_character(request: Request):
+        try:
+            character = manager.characters.update(request.path_params["character_id"],
+                                                  _character_from(await _json(request)))
+        except KeyError:
+            return _error("Personaje no encontrado.", 404)
+        except ValueError as exc:
+            return _error(str(exc))
+        return JSONResponse(_character_json(character, await asyncio.to_thread(library.list_videos)))
+
+    async def delete_character(request: Request):
+        character_id = request.path_params["character_id"]
+        if not manager.characters.get(character_id):
+            return _error("Personaje no encontrado.", 404)
+        if character_id in manager.active_characters():
+            return _error("Este personaje tiene videos en producción.", 409)
+        manager.characters.delete(character_id)
+        return JSONResponse({"ok": True})
+
+    async def suggest_characters(request: Request):
+        """3 ideas de personaje (con su nicho) que no repitan nombre ni nicho de los existentes
+        ni de las ideas ya mostradas."""
+        payload = await _json(request)
+        idioma, edad = payload.get("idioma") or "es", str(payload.get("edad") or "6-9")
+        if idioma not in core.LANGUAGES or not core.AGE_RE.match(edad):
+            return _error("Idioma o edad no válidos.")
+        pista = " ".join(str(payload.get("pista") or "").split())[:160]
+        existing = [f"{c.nombre} ({c.nicho})" for c in manager.characters.list()]
+        shown = [" ".join(str(t).split()) for t in (payload.get("evitar") or [])][:30]
+        try:
+            ideas = await character_suggester(idioma, edad, pista, existing + shown, 5)
+        except Exception as exc:  # noqa: BLE001 — credenciales, red o respuesta rara del modelo
+            return _error(f"No se pudieron proponer personajes: {exc}", 502)
+        taken = {core.topic_key(c.nombre, "") for c in manager.characters.list()}
+        taken |= {core.topic_key(t.split(" (")[0], "") for t in shown}
+        picked = []
+        for idea in ideas:
+            key = core.topic_key(idea["personaje"]["nombre"], "")
+            if key in taken:
+                continue
+            taken.add(key)
+            picked.append(idea)
+            if len(picked) == 3:
+                break
+        if not picked:
+            return _error("No salieron personajes nuevos. Prueba otra vez o cambia la pista.", 502)
+        return JSONResponse({"personajes": picked})
+
     # ------------------------------------------------------------------ trabajos
 
     async def list_jobs(request: Request):
@@ -155,7 +249,8 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
 
     async def create_job(request: Request):
         try:
-            job = manager.create(_request_from(await _json(request)))
+            payload = await _json(request)
+            job = manager.create(_request_from(payload), payload.get("personaje_id"))
         except (ValueError, TypeError) as exc:
             return _error(str(exc))
         return JSONResponse(job, status_code=201)
@@ -274,6 +369,12 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Route("/api/health", health),
         Route("/api/prompt-preview", prompt_preview, methods=["POST"]),
         Route("/api/suggest", suggest, methods=["POST"]),
+        Route("/api/characters", list_characters),
+        Route("/api/characters", create_character, methods=["POST"]),
+        Route("/api/characters/suggest", suggest_characters, methods=["POST"]),
+        Route("/api/characters/{character_id}", get_character),
+        Route("/api/characters/{character_id}", update_character, methods=["PUT"]),
+        Route("/api/characters/{character_id}", delete_character, methods=["DELETE"]),
         Route("/api/jobs", list_jobs),
         Route("/api/jobs", create_job, methods=["POST"]),
         Route("/api/jobs/{job_id}", get_job),
