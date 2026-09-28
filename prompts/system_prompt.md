@@ -151,7 +151,7 @@ Igual que en el video de referencia, donde la música y los efectos se crean en 
   - **Efectos:** crujido de papel (ruido blanco con pasabanda y envolvente irregular), garabato de crayón (ruido modulado), ding, tic-tac, cascada de campanitas, silbido de deslizamiento y swish de telón.
 - Renderízalo con Playwright y guarda los WAV (`music.wav`, `sfx.wav`, con los efectos colocados en los tiempos de `timeline.json`).
 - Si falla, genera lo mismo en Python con `numpy` + `soundfile`.
-- **Mezcla:** la voz a 0 dB; la música a −20 dB bajo la voz con ducking (`sidechaincompress`), subiendo a −12 dB en los huecos sin narración; los efectos a −10 dB. Normaliza a −14 LUFS (`loudnorm`).
+- **Mezcla:** la voz a 0 dB; la música a −20 dB bajo la voz con ducking (`sidechaincompress`), subiendo a −12 dB en los huecos sin narración; los efectos a −10 dB. Normaliza a −14 LUFS (`loudnorm`). Calibra la ganancia de la música **midiéndola después del ducking**: ajustarla por LUFS integrados (música = voz − 12) la deja unos 5 dB por debajo, porque el ducking la baja casi todo el tiempo.
 
 ## 9. Seguridad del contenido del tema
 
@@ -167,6 +167,7 @@ Marca cada punto con `[x]` o `[ ]` y anota la medida real. Un punto sin cumplir 
 - [ ] Lip-sync: en `mouth.json`, la boca se mueve solo cuando hay voz.
 - [ ] Subtítulos: `faster-whisper` sin prompt sobre `voice.wav` coincide con `words.json` (desfase < 100 ms en 3 puntos) y la ortografía es correcta en `{{IDIOMA}}`.
 - [ ] `mix.wav` a −14 LUFS ±1.
+- [ ] Música respecto a la voz (§8), medida con la misma cadena de ducking que la mezcla: RMS en ventanas de 100 ms, separando las ventanas con voz (> −35 dBFS en `voice.wav`) de los huecos. Debe quedar a −20 dB ±2 bajo la voz y a −12 dB ±2 en los huecos.
 - [ ] Captura `stage.html` con `renderAt` cada 3 s, más el primer y el último frame, y **míralos todos**: estilo de papel consistente, Lía siempre igual, nada fuera de la zona segura, subtítulos legibles y sin cortar, sin frames vacíos, movimiento en el frame 1, y el primero y el último se parecen (loop).
 - [ ] Cada dato del guion está respaldado en `research.md`.
 - [ ] El bucle abierto de la escena 2 se cierra en la escena 6.

@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import unicodedata
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
@@ -44,6 +45,18 @@ AGENT_ENV = {
     "BASH_MAX_TIMEOUT_MS": str(2 * 60 * 60 * 1000),
 }
 DISALLOWED_TOOLS = ["ScheduleWakeup", "Monitor", "CronCreate", "RemoteTrigger"]
+
+
+def agent_env() -> dict[str, str]:
+    """AGENT_ENV más el entorno virtual de la app al frente del PATH: el agente llama a
+    `python3` y `playwright` a secas, y sin esto usaría los del sistema (sin Kokoro,
+    Whisper ni Playwright) si la app no se lanzó con el venv activado (p. ej. run.sh)."""
+    env = dict(AGENT_ENV)
+    if sys.prefix != sys.base_prefix:
+        bin_dir = str(Path(sys.prefix) / ("Scripts" if os.name == "nt" else "bin"))
+        env["VIRTUAL_ENV"] = sys.prefix
+        env["PATH"] = os.pathsep.join([bin_dir, os.environ.get("PATH", "")])
+    return env
 # Sugerir temas es una respuesta corta sin herramientas: basta un modelo rápido.
 SUGGEST_MODEL = "claude-sonnet-5"
 
@@ -319,7 +332,7 @@ async def run_agent(
         cwd=str(ROOT),
         allowed_tools=ALLOWED_TOOLS,
         disallowed_tools=DISALLOWED_TOOLS,
-        env=AGENT_ENV,
+        env=agent_env(),
         permission_mode="acceptEdits",
         max_turns=req.max_turns,
         max_budget_usd=req.max_budget_usd,

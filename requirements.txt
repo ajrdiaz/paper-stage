@@ -5,6 +5,7 @@ uvicorn>=0.30
 # Pipeline local de audio y render
 kokoro>=0.9
 soundfile
+pillow
 numpy
 piper-tts
 faster-whisper
