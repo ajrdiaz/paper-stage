@@ -2,6 +2,7 @@
 __pycache__/
 models/
 assets/fonts/*.ttf
+assets/vendor/
 data/
 # Videos generados por el agente: viven solo en disco (la app los lee de ahí)
 output/

@@ -96,6 +96,8 @@ class CoreTests(unittest.TestCase):
         self.assertIn('"serie": "Teatrito de Papel"', prompt)
         self.assertIn("#teatritodepapel", prompt)
         self.assertIn("primer video de Lía", prompt)
+        self.assertIn("gsap.timeline({ paused: true })", prompt)
+        self.assertIn("`renderAt` **no devuelve nada**", prompt)
 
     def test_custom_character_prompt(self):
         character = core.Character(**CORAL)

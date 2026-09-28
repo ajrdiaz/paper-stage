@@ -26,6 +26,9 @@ PROMPT_PATH = ROOT / "prompts" / "system_prompt.md"
 OUTPUT_DIR = Path(os.environ.get("PAPER_STAGE_OUTPUT", ROOT / "output"))
 DATA_DIR = Path(os.environ.get("PAPER_STAGE_DATA", ROOT / "data"))
 FONTS_DIR = ROOT / "assets" / "fonts"
+# Librerías de animación que el agente puede incrustar en stage.html (las baja setup.sh).
+VENDOR_DIR = ROOT / "assets" / "vendor"
+VENDOR_FILES = ["gsap.min.js", "MorphSVGPlugin.min.js", "CustomEase.min.js"]
 
 DEFAULT_MODEL = "claude-opus-5-5"
 MODELS = ["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5"]
@@ -468,8 +471,9 @@ def check_env() -> dict:
         items.append({"kind": "module", "name": name, "why": why, "optional": optional,
                       "ok": importlib.util.find_spec(name) is not None})
     fonts = sorted(p.name for p in FONTS_DIR.glob("*.ttf"))
+    vendor = [name for name in VENDOR_FILES if (VENDOR_DIR / name).exists()]
     ok = all(i["ok"] or i["optional"] for i in items)
-    return {"ok": ok, "items": items, "fonts": fonts}
+    return {"ok": ok, "items": items, "fonts": fonts, "vendor": vendor, "vendor_expected": VENDOR_FILES}
 
 
 # --------------------------------------------------------------------------- #

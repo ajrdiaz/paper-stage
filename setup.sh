@@ -55,6 +55,15 @@ for f in "gaegu/Gaegu-Regular.ttf" "gaegu/Gaegu-Bold.ttf" \
     || { rm -f "$out"; echo "Aviso: no se pudo descargar $f (el agente la buscará)." >&2; }
 done
 
+echo "==> GSAP (licencia gratuita de GSAP, también comercial) → assets/vendor/"
+# Versión fija: el agente la incrusta en stage.html, y un cambio de versión podría cambiar las animaciones.
+mkdir -p assets/vendor
+for f in gsap.min.js MorphSVGPlugin.min.js CustomEase.min.js; do
+  out="assets/vendor/$f"
+  [ -f "$out" ] || curl -fsSL "https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/$f" -o "$out" \
+    || { rm -f "$out"; echo "Aviso: no se pudo descargar $f (el agente animará a mano)." >&2; }
+done
+
 echo "==> Precarga de modelos locales (Kokoro, faster-whisper small)"
 .venv/bin/python - <<'PY' || echo "Aviso: no se pudieron precargar los modelos (¿acceso a huggingface.co?). Se descargarán en el primer uso." >&2
 from kokoro import KPipeline

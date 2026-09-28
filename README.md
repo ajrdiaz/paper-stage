@@ -8,7 +8,7 @@ El agente investiga, escribe el guion y la biblia visual, graba la voz, anima, c
 |---|---|
 | Voz | Kokoro-82M (fallback: Piper) |
 | Subtítulos y lip-sync | faster-whisper `small` + envolvente de amplitud |
-| Animación | `stage.html` determinista (SVG + Canvas, `window.renderAt(t)`) |
+| Animación | `stage.html` determinista (SVG + Canvas, `window.renderAt(t)`), con GSAP en local para curvas, secuencias y transformaciones de forma |
 | Música y efectos | `OfflineAudioContext` (fallback: numpy) |
 | Render | Playwright + Chromium → ffmpeg |
 

@@ -29,6 +29,8 @@ def print_check() -> bool:
             mark = "✓" if item["ok"] else ("·" if item["optional"] else "✗")
             print(f"  {mark} {item['name']:<16} {item['why']}")
     print(f"Fuentes en assets/fonts/: {', '.join(report['fonts']) or '(ninguna; el agente las descargará)'}")
+    missing = [n for n in report["vendor_expected"] if n not in report["vendor"]]
+    print(f"GSAP en assets/vendor/: {'completo' if not missing else 'falta ' + ', '.join(missing) + ' (ejecuta ./setup.sh; sin él, el agente anima a mano)'}")
     print("\nTodo listo." if report["ok"] else "\nFaltan dependencias: ejecuta ./setup.sh")
     return report["ok"]
 

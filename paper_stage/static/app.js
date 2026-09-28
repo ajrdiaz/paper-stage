@@ -1089,6 +1089,9 @@ async function renderSystem() {
     <div class="row">${health.ok ? `<span class="pill done">Todo listo</span>` : `<span class="pill failed">Faltan dependencias</span>`}</div>
     ${group("bin", "Programas")}${group("module", "Módulos de Python")}
     <h2>Fuentes</h2><p class="small">${health.fonts.length ? health.fonts.map(esc).join(", ") : "Ninguna en assets/fonts/ (el agente las descargará)."}</p>
+    <h2>Animación (GSAP)</h2><p class="small">${health.vendor.length === health.vendor_expected.length
+      ? `${health.vendor.map(esc).join(", ")} en assets/vendor/.`
+      : `Falta ${health.vendor_expected.filter(n => !health.vendor.includes(n)).map(esc).join(", ")} en assets/vendor/. Ejecuta <code>./setup.sh</code>; sin GSAP, el agente anima a mano.`}</p>
     ${health.ok ? "" : `<p class="small">Para instalar lo que falta:</p><pre class="cmd">./setup.sh</pre>`}`;
   $("#about").innerHTML = `
     <h2>Cómo funciona</h2>

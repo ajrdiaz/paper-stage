@@ -154,7 +154,9 @@ def cover(out_dir: Path) -> Path | None:
                 page.wait_for_function(
                     "typeof window.renderAt === 'function' && window.READY !== false", timeout=30000)
                 page.evaluate("document.fonts.ready")
-                page.evaluate(f"window.renderAt({_cover_time(publish)})")
+                # Sin devolver nada: si renderAt devuelve un objeto grande (p. ej. una timeline
+                # de GSAP), evaluate intenta serializarlo y se cuelga.
+                page.evaluate(f"() => {{ window.renderAt({_cover_time(publish)}); }}")
                 page.evaluate(_COVER_JS, str(publish.get("texto_portada") or "").strip())
                 page.screenshot(path=str(image), type="jpeg", quality=92)
             finally:
