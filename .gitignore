@@ -8,3 +8,6 @@ output/*/*.wav
 output/*/agent_log.jsonl
 data/
 output/*/poster.jpg
+# Capturas sueltas del QA (las hojas qa_*/sheet* ya las resumen)
+output/*/snaps/t*.png
+output/*/snaps/final/

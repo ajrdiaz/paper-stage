@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Teatrito de Papel — ¿Por qué bostezamos cuando otros bostezan?</title>
+<style>
+/*__FONTS__*/
+html,body{margin:0;padding:0;background:#1E2A4F;overflow:hidden}
+#root{position:relative;width:1080px;height:1920px;overflow:hidden;background:#1E2A4F}
+#stage{position:absolute;left:0;top:0}
+canvas{position:absolute;left:0;top:0;pointer-events:none}
+#gouache{mix-blend-mode:multiply;opacity:.16}
+#grain{mix-blend-mode:multiply;opacity:.10}
+#subs{position:absolute;left:70px;width:860px;top:1478px;height:204px;display:flex;align-items:center;justify-content:center;
+  text-align:center;font-family:'Fredoka',sans-serif;font-weight:600;font-size:60px;line-height:1.18;color:#F3E9D2;
+  letter-spacing:.5px}
+#subs .in{max-width:860px}
+#subs .w{display:inline-block;margin:0 .13em;white-space:nowrap}
+#subs .up{opacity:.78}
+#subs .on{color:#E9B949}
+</style>
+</head>
+<body>
+<div id="root">
+<svg id="stage" width="1080" height="1920" viewBox="0 0 1080 1920" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <!-- papel: bordes rasgados + fibras de gouache + sombra suave. 3 variantes para el "boil" -->
+  <filter id="pp0" x="-8%" y="-8%" width="116%" height="116%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="11" result="warp"/>
+    <feDisplacementMap in="SourceGraphic" in2="warp" scale="6" xChannelSelector="R" yChannelSelector="G" result="shape"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.09 0.7" numOctaves="2" seed="21" result="fib"/>
+    <feColorMatrix in="fib" type="matrix" values="0 0 0 0 0.16  0 0 0 0 0.10  0 0 0 0 0.04  -1.3 0 0 0 0.78" result="fibA"/>
+    <feComposite in="fibA" in2="shape" operator="in" result="fibIn"/>
+    <feComposite in="fibIn" in2="shape" operator="over" result="tex"/>
+    <feDropShadow in="tex" dx="2" dy="5" stdDeviation="4" flood-color="#2a1a0c" flood-opacity="0.32"/>
+  </filter>
+  <filter id="pp1" x="-8%" y="-8%" width="116%" height="116%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="12" result="warp"/>
+    <feDisplacementMap in="SourceGraphic" in2="warp" scale="6" xChannelSelector="R" yChannelSelector="G" result="shape"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.09 0.7" numOctaves="2" seed="21" result="fib"/>
+    <feColorMatrix in="fib" type="matrix" values="0 0 0 0 0.16  0 0 0 0 0.10  0 0 0 0 0.04  -1.3 0 0 0 0.78" result="fibA"/>
+    <feComposite in="fibA" in2="shape" operator="in" result="fibIn"/>
+    <feComposite in="fibIn" in2="shape" operator="over" result="tex"/>
+    <feDropShadow in="tex" dx="2" dy="5" stdDeviation="4" flood-color="#2a1a0c" flood-opacity="0.32"/>
+  </filter>
+  <filter id="pp2" x="-8%" y="-8%" width="116%" height="116%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="13" result="warp"/>
+    <feDisplacementMap in="SourceGraphic" in2="warp" scale="6" xChannelSelector="R" yChannelSelector="G" result="shape"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.09 0.7" numOctaves="2" seed="21" result="fib"/>
+    <feColorMatrix in="fib" type="matrix" values="0 0 0 0 0.16  0 0 0 0 0.10  0 0 0 0 0.04  -1.3 0 0 0 0.78" result="fibA"/>
+    <feComposite in="fibA" in2="shape" operator="in" result="fibIn"/>
+    <feComposite in="fibIn" in2="shape" operator="over" result="tex"/>
+    <feDropShadow in="tex" dx="2" dy="5" stdDeviation="4" flood-color="#2a1a0c" flood-opacity="0.32"/>
+  </filter>
+  <!-- solo bordes rasgados (sin sombra), para fondos grandes -->
+  <filter id="pr0" x="-3%" y="-3%" width="106%" height="106%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="2" seed="31" result="warp"/>
+    <feDisplacementMap in="SourceGraphic" in2="warp" scale="7" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+  <filter id="pr1" x="-3%" y="-3%" width="106%" height="106%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="2" seed="32" result="warp"/>
+    <feDisplacementMap in="SourceGraphic" in2="warp" scale="7" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+  <filter id="pr2" x="-3%" y="-3%" width="106%" height="106%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="2" seed="33" result="warp"/>
+    <feDisplacementMap in="SourceGraphic" in2="warp" scale="7" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+  <!-- crayón: trazo moteado y tembloroso -->
+  <filter id="cr0" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="41" result="n"/>
+    <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  -2.6 0 0 0 2.05" result="a"/>
+    <feComposite in="SourceGraphic" in2="a" operator="in" result="t"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.06" numOctaves="1" seed="42" result="w"/>
+    <feDisplacementMap in="t" in2="w" scale="4" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+  <filter id="cr1" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="43" result="n"/>
+    <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  -2.6 0 0 0 2.05" result="a"/>
+    <feComposite in="SourceGraphic" in2="a" operator="in" result="t"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.06" numOctaves="1" seed="44" result="w"/>
+    <feDisplacementMap in="t" in2="w" scale="4" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+  <filter id="cr2" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="45" result="n"/>
+    <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  -2.6 0 0 0 2.05" result="a"/>
+    <feComposite in="SourceGraphic" in2="a" operator="in" result="t"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.06" numOctaves="1" seed="46" result="w"/>
+    <feDisplacementMap in="t" in2="w" scale="4" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+  <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="18"/></filter>
+  <clipPath id="win"><rect x="80" y="296" width="880" height="1010"/></clipPath>
+  <radialGradient id="sunGlow" cx="0.28" cy="0.18" r="0.8">
+    <stop offset="0" stop-color="#FFF6D8"/><stop offset="0.45" stop-color="#F8E4B0"/><stop offset="1" stop-color="#F1D597"/>
+  </radialGradient>
+  <linearGradient id="dusk" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#6FA9DD"/><stop offset="0.45" stop-color="#A9CDE6"/><stop offset="0.8" stop-color="#F6D7A2"/><stop offset="1" stop-color="#F7C27E"/>
+  </linearGradient>
+  <linearGradient id="roll" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#7E5A36"/><stop offset="0.35" stop-color="#E9CD9F"/><stop offset="0.6" stop-color="#C9A57A"/><stop offset="1" stop-color="#6E4C2C"/>
+  </linearGradient>
+  <radialGradient id="halo"><stop offset="0" stop-color="#FFD27A" stop-opacity=".9"/><stop offset="1" stop-color="#FFB347" stop-opacity="0"/></radialGradient>
+  <radialGradient id="vign" cx=".5" cy=".42" r=".75"><stop offset=".55" stop-color="#4B3B7A" stop-opacity="0"/><stop offset="1" stop-color="#141B36" stop-opacity=".85"/></radialGradient>
+  <linearGradient id="duskP" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#A996D6"/><stop offset="0.5" stop-color="#D7B6D9"/><stop offset="0.85" stop-color="#F6C8A8"/><stop offset="1" stop-color="#F7B98E"/></linearGradient>
+  <linearGradient id="goldP" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FBE7A6"/><stop offset="0.6" stop-color="#FAD58E"/><stop offset="1" stop-color="#F8C28A"/></linearGradient>
+</defs>
+<g id="dyn"></g>
+</svg>
+<canvas id="gouache" width="1080" height="1920"></canvas>
+<canvas id="grain" width="1080" height="1920"></canvas>
+<div id="subs"></div>
+</div>
+
+<script>
+"use strict";
+const DATA = /*__DATA__*/null;
+const TL = DATA.timeline, WORDS = DATA.words, MOUTH = DATA.mouth;
+window.DURATION = TL.duration;
+const SC = {}; TL.scenes.forEach(s => SC[s.n] = s);
+
+/* ---------- utilidades deterministas ---------- */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const H = s => mulberry32(s * 2654435761 >>> 0)();          // hash 0..1
+const clamp = (x,a=0,b=1) => Math.max(a, Math.min(b, x));
+const lerp = (a,b,p) => a + (b-a)*p;
+const ease = p => p<.5 ? 2*p*p : 1-Math.pow(-2*p+2,2)/2;
+const easeOut = p => 1-Math.pow(1-p,3);
+const easeIn = p => p*p*p;
+const back = p => {const c1=1.70158,c3=c1+1; return 1+c3*Math.pow(p-1,3)+c1*Math.pow(p-1,2);};
+const prog = (t,a,b) => clamp((t-a)/(b-a));
+const f = x => (Math.round(x*10)/10).toString();
+const f3 = x => (Math.round(x*1000)/1000).toString();
+const norm = w => w.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9ñ]/g,'');
+function WT(n, word, occ=0, end=false){
+  let k=0; for(const w of WORDS){ if(w.scene===n && norm(w.w).startsWith(norm(word))){ if(k===occ) return end?w.e:w.s; k++; } }
+  console.warn('palabra no encontrada', n, word); return SC[n].voice_start;
+}
+function kf(t, keys){ // keyframes [[t,v],...] con ease entre ellos
+  if(t<=keys[0][0]) return keys[0][1];
+  for(let i=1;i<keys.length;i++){ if(t<=keys[i][0]){ const [t0,v0]=keys[i-1],[t1,v1]=keys[i]; return lerp(v0,v1,ease(prog(t,t0,t1))); } }
+  return keys[keys.length-1][1];
+}
+let BV = 0, TB = 0, TM = 0;       // variante de boil (0..2), tick de boil, tiempo de movimiento
+const jit = (id, a=1.5) => (H(id*977 + TB*131) - .5) * 2 * a;   // ±1.5 px con semilla, cambia a 8 fps
+
+/* ---------- formas de papel ---------- */
+const EDGE = '#FFF8EA';
+function spline(p, closed=true){
+  const n=p.length; let d=`M${f(p[0][0])} ${f(p[0][1])}`; const m = closed?n:n-1;
+  for(let i=0;i<m;i++){ const p0=p[closed?(i-1+n)%n:Math.max(0,i-1)], p1=p[i], p2=p[(i+1)%n], p3=p[closed?(i+2)%n:Math.min(n-1,i+2)];
+    d+=`C${f(p1[0]+(p2[0]-p0[0])/6)} ${f(p1[1]+(p2[1]-p0[1])/6)} ${f(p2[0]-(p3[0]-p1[0])/6)} ${f(p2[1]-(p3[1]-p1[1])/6)} ${f(p2[0])} ${f(p2[1])}`; }
+  return closed ? d+'Z' : d;
+}
+function blob(cx,cy,r,seed,amp=.06,n=11,ry=null){
+  const rnd=mulberry32(seed); const pts=[]; ry = ry ?? r;
+  for(let i=0;i<n;i++){ const a=i/n*Math.PI*2, k=1+(rnd()-.5)*2*amp; pts.push([cx+r*k*Math.cos(a), cy+ry*k*Math.sin(a)]); }
+  return spline(pts);
+}
+function rrect(x,y,w,h,seed,j=3){
+  const rnd=mulberry32(seed), pts=[];
+  const seg=(x0,y0,x1,y1,k)=>{for(let i=0;i<k;i++){const p=i/k; pts.push([x0+(x1-x0)*p+(rnd()-.5)*j, y0+(y1-y0)*p+(rnd()-.5)*j]);}};
+  const kx=Math.max(2,Math.round(w/70)), ky=Math.max(2,Math.round(h/70));
+  seg(x,y,x+w,y,kx); seg(x+w,y,x+w,y+h,ky); seg(x+w,y+h,x,y+h,kx); seg(x,y+h,x,y,ky);
+  return 'M'+pts.map(p=>f(p[0])+' '+f(p[1])).join('L')+'Z';
+}
+const P = (d, fill, sw=4, extra='') => `<path d="${d}" fill="${fill}" stroke="${EDGE}" stroke-width="${sw}" stroke-linejoin="round" ${extra}/>`;
+const C = (cx,cy,r,fill,sw=4,extra='') => `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(Math.max(0,r))}" fill="${fill}" stroke="${EDGE}" stroke-width="${sw}" ${extra}/>`;
+const paper = s => `<g filter="url(#pp${BV})">${s}</g>`;
+const rough = s => `<g filter="url(#pr${BV})">${s}</g>`;
+const crayon = s => `<g filter="url(#cr${BV})">${s}</g>`;
+const G = (tr, s, extra='') => `<g transform="${tr}" ${extra}>${s}</g>`;
+function star4(x,y,r,fill,rot=0){ const k=r*.32; return `<path transform="translate(${f(x)} ${f(y)}) rotate(${f(rot)})" d="M0 ${-r} Q${k} ${-k} ${r} 0 Q${k} ${k} 0 ${r} Q${-k} ${k} ${-r} 0 Q${-k} ${-k} 0 ${-r}Z" fill="${fill}" stroke="${EDGE}" stroke-width="3"/>`; }
+function face(x,y,s,mood='happy'){ // carita de punto para bolitas, soles y ondas
+  let g=`<circle cx="${f(x-7*s)}" cy="${f(y-2*s)}" r="${f(2.6*s)}" fill="#1A1A22"/><circle cx="${f(x+7*s)}" cy="${f(y-2*s)}" r="${f(2.6*s)}" fill="#1A1A22"/>`;
+  if(mood==='happy') g+=`<path d="M${f(x-5*s)} ${f(y+4*s)} Q${f(x)} ${f(y+9*s)} ${f(x+5*s)} ${f(y+4*s)}" stroke="#1A1A22" stroke-width="${f(1.8*s)}" fill="none" stroke-linecap="round"/>`;
+  if(mood==='o') g+=`<ellipse cx="${f(x)}" cy="${f(y+6*s)}" rx="${f(2.6*s)}" ry="${f(3.2*s)}" fill="#6E2433"/>`;
+  if(mood==='sleepy') g=`<path d="M${f(x-10*s)} ${f(y-2*s)} q3 3 6 0 M${f(x+4*s)} ${f(y-2*s)} q3 3 6 0" stroke="#1A1A22" stroke-width="${f(2*s)}" fill="none" stroke-linecap="round"/><path d="M${f(x-4*s)} ${f(y+5*s)} Q${f(x)} ${f(y+8*s)} ${f(x+4*s)} ${f(y+5*s)}" stroke="#1A1A22" stroke-width="${f(1.8*s)}" fill="none" stroke-linecap="round"/>`;
+  return g;
+}
+
+/* ---------- colores ---------- */
+const MUST='#E9B949', CORAL='#E8736B', TEAL='#3FA796', CREAM='#F3E9D2', KRAFT='#C9A57A', NAVY='#1E2A4F', VIOLET='#4B3B7A', SKY='#5FA8E0', ORANGE='#F28C3A', SKIN='#F6D5B8';
+function mix(c1,c2,p){ const a=parseInt(c1.slice(1),16), b=parseInt(c2.slice(1),16);
+  const r=Math.round(lerp(a>>16,b>>16,p)), g=Math.round(lerp(a>>8&255,b>>8&255,p)), bl=Math.round(lerp(a&255,b&255,p));
+  return '#'+((1<<24)|(r<<16)|(g<<8)|bl).toString(16).slice(1); }
+
+/* ---------- tiempos de escena y transiciones ---------- */
+const S1=SC[1],S2=SC[2],S3=SC[3],S4=SC[4],S5=SC[5],S6=SC[6],S7=SC[7];
+const T12=[S1.end-1.0, S1.end+0.3], T23=[S2.end-0.85, S2.end+0.4];
+const T34=[S3.end-0.7, S3.end+0.4], T45=[S4.end-0.55, S4.end+0.5], T56=[S5.end-0.55, S5.end+0.45], T67=[S6.end-0.5, S6.end+0.8];
+const WIN = {x:80,y:296,w:880,h:1010,cx:520,cy:800};
+
+/* ---------- LÍA ---------- */
+const BLINKS = (()=>{ const r=mulberry32(77), a=[]; let t=1.4; while(t<TL.duration-0.6){ a.push(t); t+=3+2*r(); } return a; })();
+function lia(x,y,s,o){
+  const tm=TM;
+  const breath = 1 + .01*Math.sin(tm*2.4);
+  const armCol = TEAL;
+  const arm = (sx,sy,ang,crayonOn,id) => {
+    let a = `<g transform="translate(${sx} ${sy}) rotate(${f(ang)})">`;
+    a += P(`M-6 -17 L112 -15 Q120 0 112 15 L-6 17 Q-20 0 -6 -17Z`, armCol, 4);
+    a += `<path d="M104 -15 L116 -15 L116 15 L104 15Z" fill="#FFFDF6"/>`;
+    if(crayonOn){ a += `<g transform="translate(0 ${-3})">` + P(`M124 -8 L196 -8 L214 0 L196 8 L124 8Z`, '#2F6FD6', 3) +
+       `<path d="M146 -8 L154 -8 L154 8 L146 8Z M172 -8 L178 -8 L178 8 L172 8Z" fill="#1D4E9E"/></g>`; }
+    a += C(134, 0, 18, SKIN, 4);
+    return a + '</g>';
+  };
+  const m = o.mouth;
+  const headRot = o.headRot;
+  let g = `<g transform="translate(${f(x)} ${f(y)}) scale(${f3(s)})">`;
+  g += `<ellipse cx="0" cy="6" rx="120" ry="15" fill="#2a1705" opacity=".28"/>`;
+  if(o.glow>0) g += `<circle cx="0" cy="-300" r="${f(330)}" fill="url(#halo)" opacity="${f3(o.glow)}"/>`;
+  let b = '';
+  b += P('M-42 -104 L-18 -104 L-18 -14 L-42 -14Z', NAVY, 3) + P('M18 -104 L42 -104 L42 -14 L18 -14Z', NAVY, 3);
+  b += P('M-64 -20 Q-66 -4 -34 -2 Q-6 -2 -10 -20 Q-34 -30 -64 -20Z', '#8A3B2E', 3) + P('M64 -20 Q66 -4 34 -2 Q6 -2 10 -20 Q34 -30 64 -20Z', '#8A3B2E', 3);
+  b += `<g transform="translate(0 -180) scale(1 ${f3(breath)}) translate(0 180)">`;
+  b += P('M-68 -196 L68 -196 L112 -96 Q0 -80 -112 -96Z', CORAL, 4);
+  b += `<path d="M-40 -190 L-58 -100 M0 -192 L0 -88 M40 -190 L58 -100" stroke="#C95A53" stroke-width="3" opacity=".6"/>`;
+  b += P('M-62 -330 Q-92 -322 -94 -282 L-86 -180 Q0 -166 86 -180 L94 -282 Q92 -322 62 -330 Q0 -346 -62 -330Z', TEAL, 4);
+  b += `<path d="M-84 -196 Q0 -184 84 -196 L86 -181 Q0 -167 -86 -181Z" fill="#2F8C7C"/>`;
+  b += `<path d="M-50 -260 l8 10 l8 -10 M-10 -250 l8 10 l8 -10 M30 -262 l8 10 l8 -10" stroke="#52BBA8" stroke-width="3" fill="none" opacity=".8"/>`;
+  b += P('M-2 -334 Q-30 -346 -52 -330 Q-46 -306 -2 -312Z', '#FFFDF6', 3) + P('M2 -334 Q30 -346 52 -330 Q46 -306 2 -312Z', '#FFFDF6', 3);
+  b += `</g>`;
+  // cabeza
+  let h = '';
+  h += P('M-18 -352 L18 -352 L18 -326 L-18 -326Z', SKIN, 3);
+  h += P('M-118 -352 C-130 -470 -92 -562 0 -564 C92 -562 130 -470 118 -352 Q100 -338 78 -346 L-78 -346 Q-100 -338 -118 -352Z', '#1C1B24', 4);
+  h += `<circle cx="0" cy="-446" r="100" fill="${SKIN}"/>`;
+  h += `<path d="M-106 -440 C-110 -520 -64 -564 0 -564 C64 -564 110 -520 106 -440 L96 -468 Q70 -482 48 -474 Q24 -484 0 -476 Q-24 -484 -48 -474 Q-70 -482 -96 -468Z" fill="#1C1B24"/>`;
+  h += `<path d="M-70 -530 Q-40 -552 -8 -550" stroke="#5A5870" stroke-width="7" fill="none" stroke-linecap="round" opacity=".55"/>`;
+  h += `<g transform="translate(70 -512) rotate(-28)">` + P('M-24 -9 L24 -9 Q30 0 24 9 L-24 9 Q-30 0 -24 -9Z', MUST, 3) + `</g>`;
+  if(o.blink){ h += `<path d="M-46 -430 Q-36 -424 -26 -430 M26 -430 Q36 -424 46 -430" stroke="#1A1A22" stroke-width="5" fill="none" stroke-linecap="round"/>`; }
+  else { h += `<circle cx="-36" cy="-432" r="9.5" fill="#1A1A22"/><circle cx="36" cy="-432" r="9.5" fill="#1A1A22"/><circle cx="-33" cy="-435" r="2.8" fill="#fff"/><circle cx="39" cy="-435" r="2.8" fill="#fff"/>`; }
+  h += `<circle cx="-62" cy="-398" r="17" fill="#F29A96" opacity=".9"/><circle cx="62" cy="-398" r="17" fill="#F29A96" opacity=".9"/>`;
+  const rx = 6.5 + 5.5*m, ry = 2.6 + 11.5*m;
+  h += `<ellipse cx="0" cy="${f(-392+ry*.25)}" rx="${f(rx)}" ry="${f(ry)}" fill="#6E2433"/>`;
+  if(m>.35) h += `<ellipse cx="0" cy="${f(-392+ry*.25+ry*.5)}" rx="${f(rx*.6)}" ry="${f(ry*.35)}" fill="#E8736B"/>`;
+  b += `<g transform="rotate(${f(headRot)} 0 -340)">${h}</g>`;
+  b += arm(-74, -318, o.arm1, true, 1);
+  b += arm(74, -318, o.arm2, false, 2);
+  g += paper(b);
+  return g + '</g>';
+}
+function ideaLines(cx, cy, s, amt){
+  if(amt<=0.01) return '';
+  let g='';
+  for(let i=0;i<7;i++){
+    const a = (-160 + i*23.3) * Math.PI/180;
+    const pulse = .75 + .25*Math.sin(TM*6 + i*1.7);
+    const r0 = (150 + 6*Math.sin(TM*5+i))*s, len = 42*s*amt*pulse;
+    g += `<path d="M${f(cx+Math.cos(a)*r0)} ${f(cy+Math.sin(a)*r0)} L${f(cx+Math.cos(a)*(r0+len))} ${f(cy+Math.sin(a)*(r0+len))}" stroke="${CREAM}" stroke-width="${f(11*s)}" stroke-linecap="round"/>`;
+  }
+  return paper(g);
+}
+
+/* ---------- ESCENARIO FIJO (teatrito) ---------- */
+function theaterBack(){
+  let g = '';
+  g += `<rect x="0" y="0" width="1080" height="1920" fill="${VIOLET}"/><rect x="0" y="0" width="1080" height="1920" fill="url(#vign)"/>`;
+  // estrellitas de papel decorativas (fuera de lo importante)
+  for(let i=0;i<14;i++){ const x=40+H(i+900)*1000, y = i<8 ? 40+H(i+950)*150 : 1720+H(i+950)*170; g += star4(x+jit(i+300,1), y+jit(i+320,1), 7+H(i+980)*9, i%3?CREAM:MUST, H(i)*90); }
+  g += rough(P(rrect(36,222,968,1222,5,5), KRAFT, 5) + `<path d="${rrect(58,246,924,1178,6,3)}" fill="#A8845B"/>`);
+  return g;
+}
+function theaterFront(){
+  let g='';
+  // piso de madera
+  let fl = P(rrect(56,1290,928,128,7,3), '#B98452', 4);
+  for(let i=1;i<4;i++) fl += `<path d="M60 ${1290+i*32} L980 ${1290+i*32+ (i%2?2:-2)}" stroke="#8C5D34" stroke-width="3" opacity=".7"/>`;
+  for(let i=0;i<9;i++){ const x=110+i*105+(i%2)*40, r=i%4; fl += `<path d="M${x} ${1290+r*32} l0 32" stroke="#8C5D34" stroke-width="3" opacity=".6"/>`; }
+  fl += P(rrect(46,1408,948,26,8,2), '#7A5230', 3);
+  g += paper(fl);
+  return g;
+}
+function curtains(){
+  let g='';
+  const side = (flip) => {
+    const sx = flip ? -1 : 1, ox = flip ? 1040 : 0;
+    let c = `<g transform="translate(${ox} 0) scale(${sx} 1)">`;
+    c += P('M58 300 L168 300 Q150 700 104 905 Q150 1100 176 1300 L58 1300Z', CORAL, 4);
+    c += `<path d="M86 310 Q80 700 72 900 Q80 1100 88 1290 M120 310 Q112 700 96 905 Q118 1100 136 1290 M150 310 Q134 700 102 905" stroke="#C9544D" stroke-width="6" fill="none" opacity=".7"/>`;
+    c += P('M60 885 Q110 870 150 890 Q156 912 150 930 Q108 944 60 928Z', MUST, 3);
+    c += `</g>`;
+    return c;
+  };
+  g += paper(side(false) + side(true));
+  // cenefa festoneada
+  let v = P('M50 232 L990 232 L990 318 ' + Array.from({length:8},(_,i)=>{const x0=990-i*117.5, x1=x0-117.5; return `Q${f((x0+x1)/2)} 382 ${f(x1)} 318`;}).join(' ') + ' Z', CORAL, 4);
+  v += `<path d="${Array.from({length:8},(_,i)=>{const x0=50+i*117.5, x1=x0+117.5; return `M${f(x0)} 318 Q${f((x0+x1)/2)} 382 ${f(x1)} 318`;}).join(' ')}" stroke="${MUST}" stroke-width="9" fill="none"/>`;
+  for(let i=0;i<8;i++) v += C(50+i*117.5+58.75, 352+jit(i+60,1), 9, MUST, 3);
+  g += paper(v);
+  return g;
+}
+
+/* ================== TEMA: BOSTEZOS ================== */
+const LAV='#B9A6DC', LAVD='#8F7BB8', DAWN='#9CC7E4', CATC='#F6E6C8', DOGC='#D9A066', DOGD='#8A5A3B', CHIMP='#7A5236', CHIMPF='#E8C4A0', INK='#1A1A22', MOUTHC='#6E2433', TONGUE='#F29A96';
+const yawnEnv = (t, t0, d=1.2) => { if(t<t0 || t>t0+d) return 0; const a = prog(t,t0,t0+.32), b = 1-prog(t,t0+d-.3,t0+d); return easeOut(Math.min(a,b)); };
+function qmark(x,y,s,col,p){ // signo de pregunta dibujado en crayón (no es texto)
+  if(p<=0.01) return '';
+  const k = back(clamp(p));
+  return crayon(G(`translate(${f(x)} ${f(y)}) scale(${f3(k*s)}) rotate(${f(8*Math.sin(TM*4+x))})`,
+    `<path d="M-16 -22 Q-16 -46 2 -46 Q20 -46 20 -28 Q20 -14 4 -8 L3 8" stroke="${col}" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="3" cy="26" r="6.5" fill="${col}"/>`));
+}
+function heart(x,y,s,fill=CORAL){ return G(`translate(${f(x)} ${f(y)}) scale(${f3(s)})`, P('M0 26 C-44 -2 -40 -44 -14 -40 Q0 -38 0 -22 Q0 -38 14 -40 C40 -44 44 -2 0 26Z', fill, 4)); }
+// ojos y boca genéricos para personajes secundarios (coordenadas locales)
+function eyesMouth(ex, ey, s, o){
+  const y = o.yawn || 0; let g = '';
+  if(y > .45 || o.closed){ g += `<path d="M${f(-ex-8*s)} ${f(ey)} Q${f(-ex)} ${f(ey+7*s)} ${f(-ex+8*s)} ${f(ey)} M${f(ex-8*s)} ${f(ey)} Q${f(ex)} ${f(ey+7*s)} ${f(ex+8*s)} ${f(ey)}" stroke="${INK}" stroke-width="${f(3.4*s)}" fill="none" stroke-linecap="round"/>`; }
+  else { g += `<circle cx="${f(-ex)}" cy="${f(ey)}" r="${f(6*s)}" fill="${INK}"/><circle cx="${f(ex)}" cy="${f(ey)}" r="${f(6*s)}" fill="${INK}"/><circle cx="${f(-ex+2*s)}" cy="${f(ey-2*s)}" r="${f(1.8*s)}" fill="#fff"/><circle cx="${f(ex+2*s)}" cy="${f(ey-2*s)}" r="${f(1.8*s)}" fill="#fff"/>`; }
+  const my = o.my ?? ey + 22*s;
+  if(y > .04){ const rx=(5+15*y)*s, ry=(3+22*y)*s; g += `<ellipse cx="0" cy="${f(my+ry*.4)}" rx="${f(rx)}" ry="${f(ry)}" fill="${MOUTHC}"/><ellipse cx="0" cy="${f(my+ry*.4+ry*.55)}" rx="${f(rx*.6)}" ry="${f(ry*.33)}" fill="${TONGUE}"/>`; }
+  else if(o.dots){ g += `<circle cx="0" cy="${f(my)}" r="${f(3*s)}" fill="${MOUTHC}"/>`; }
+  else g += `<path d="M${f(-8*s)} ${f(my)} Q0 ${f(my+8*s)} ${f(8*s)} ${f(my)}" stroke="${INK}" stroke-width="${f(3*s)}" fill="none" stroke-linecap="round"/>`;
+  return g;
+}
+// confeti-personaje (Coral, Teo, familia, amigos, desconocido)
+function confettiChar(x, y, r, col, o={}){
+  const y1 = o.yawn||0, seed = o.seed||1;
+  const sq = 1 + .035*Math.sin(TM*3.2 + seed) + .1*y1;
+  let g = `<g transform="translate(${f(x+jit(seed*7+1,1.2))} ${f(y+jit(seed*7+2,1.2))}) scale(${f3(1/sq*(1+.02*y1))} ${f3(sq)})">`;
+  g += `<ellipse cx="0" cy="${f(r*.98)}" rx="${f(r*.8)}" ry="${f(r*.14)}" fill="#2a1705" opacity=".18"/>`;
+  g += P(blob(0,0,r,seed+500,.06,10), col, 4);
+  g += `<circle cx="${f(-r*.52)}" cy="${f(r*.22)}" r="${f(r*.14)}" fill="#F29A96" opacity=".75"/><circle cx="${f(r*.52)}" cy="${f(r*.22)}" r="${f(r*.14)}" fill="#F29A96" opacity=".75"/>`;
+  g += eyesMouth(r*.3, -r*.08, r/60, {yawn:y1, closed:o.closed, my:r*.22, dots:o.dots});
+  // bracitos que se estiran al bostezar
+  const aa = 30 + 60*y1;
+  g += `<path d="M${f(-r*.95)} ${f(r*.1)} l${f(-r*.35*Math.cos(aa*Math.PI/180))} ${f(-r*.35*Math.sin(aa*Math.PI/180))}" stroke="${EDGE}" stroke-width="${f(r*.2)}" stroke-linecap="round"/><path d="M${f(-r*.95)} ${f(r*.1)} l${f(-r*.35*Math.cos(aa*Math.PI/180))} ${f(-r*.35*Math.sin(aa*Math.PI/180))}" stroke="${col}" stroke-width="${f(r*.13)}" stroke-linecap="round"/>`;
+  g += `<path d="M${f(r*.95)} ${f(r*.1)} l${f(r*.35*Math.cos(aa*Math.PI/180))} ${f(-r*.35*Math.sin(aa*Math.PI/180))}" stroke="${EDGE}" stroke-width="${f(r*.2)}" stroke-linecap="round"/><path d="M${f(r*.95)} ${f(r*.1)} l${f(r*.35*Math.cos(aa*Math.PI/180))} ${f(-r*.35*Math.sin(aa*Math.PI/180))}" stroke="${col}" stroke-width="${f(r*.13)}" stroke-linecap="round"/>`;
+  return g + '</g>';
+}
+function fallingConfetti(x, y, s, col, rot){ return G(`translate(${f(x)} ${f(y)}) rotate(${f(rot)}) scale(${f3(s)} ${f3(Math.abs(Math.cos(rot*Math.PI/90))*.7+.3)})`, P('M-34 -26 L34 -26 L34 26 L-34 26Z', col, 4)); }
+
+/* ---------- Mishi, el gatito (origen: centro inferior, sobre el cojín) ---------- */
+function catHead(o){
+  const y = o.yawn||0; let h = '';
+  h += P('M-54 -26 L-46 -88 L-12 -54Z', CATC, 4) + P('M12 -54 L46 -88 L54 -26Z', CATC, 4);
+  h += `<path d="M-44 -38 L-40 -72 L-22 -52Z M22 -52 L40 -72 L44 -38Z" fill="#F4B6B0"/>`;
+  h += `<circle cx="0" cy="0" r="62" fill="${CATC}" stroke="${EDGE}" stroke-width="4"/>`;
+  h += `<path d="M-14 -58 l4 18 M0 -61 l0 20 M14 -58 l-4 18" stroke="#D9A066" stroke-width="7" stroke-linecap="round"/>`;
+  h += `<circle cx="-36" cy="16" r="10" fill="#F4B6B0" opacity=".8"/><circle cx="36" cy="16" r="10" fill="#F4B6B0" opacity=".8"/>`;
+  if(y > .45 || o.sleep){ h += `<path d="M-32 -6 Q-22 2 -12 -6 M12 -6 Q22 2 32 -6" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/>`; }
+  else { h += `<ellipse cx="-22" cy="-6" rx="7" ry="9" fill="${INK}"/><ellipse cx="22" cy="-6" rx="7" ry="9" fill="${INK}"/><circle cx="-20" cy="-9" r="2.4" fill="#fff"/><circle cx="24" cy="-9" r="2.4" fill="#fff"/>`; }
+  h += `<path d="M-6 8 L6 8 L0 14Z" fill="#E07A83"/>`;
+  if(y > .04){ const rx = 6+18*y, ry = 4+30*y; h += `<ellipse cx="0" cy="${f(14+ry*.8)}" rx="${f(rx)}" ry="${f(ry)}" fill="${MOUTHC}" stroke="${EDGE}" stroke-width="2"/><ellipse cx="0" cy="${f(14+ry*1.35)}" rx="${f(rx*.62)}" ry="${f(ry*.35)}" fill="${TONGUE}"/>`;
+    h += `<path d="M${f(-rx*.5)} ${f(14+ry*.8-ry*.8)} l3 7 l3 -7 M${f(rx*.5-6)} ${f(14+ry*.8-ry*.8)} l3 7 l3 -7" fill="#fff"/>`; }
+  else h += `<path d="M-10 17 Q-5 23 0 17 Q5 23 10 17" stroke="${INK}" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+  h += `<path d="M-30 12 L-70 4 M-30 18 L-72 20 M30 12 L70 4 M30 18 L72 20" stroke="#8C6A4A" stroke-width="2.5" stroke-linecap="round"/>`;
+  return h;
+}
+function catFigure(o){
+  const {yawn=0, sleep=0, lift=0, stretch=0} = o;
+  let g = '';
+  const tw = 14*Math.sin(TM*4.2);
+  const tail = `M60 -40 Q140 ${f(-40+tw)} ${f(135+tw*.6)} ${f(-115+30*sleep)}`;
+  g += `<path d="${tail}" stroke="${EDGE}" stroke-width="30" fill="none" stroke-linecap="round"/><path d="${tail}" stroke="${CATC}" stroke-width="22" fill="none" stroke-linecap="round"/>`;
+  const bx = 20 + 10*stretch, bw = 92 + 24*stretch, bh = 56 - 10*stretch;
+  g += P(blob(bx, -bh, bw, 51, .05, 10, bh), CATC, 4);
+  [0,34,68].forEach(k => g += `<path d="M${f(bx-20+k*(1+.2*stretch))} ${f(-2*bh+4)} q12 18 2 38" stroke="#D9A066" stroke-width="9" fill="none" stroke-linecap="round"/>`);
+  const px = -40 - 80*stretch;
+  g += `<ellipse cx="${f(px)}" cy="-12" rx="26" ry="14" fill="${CATC}" stroke="${EDGE}" stroke-width="3"/><ellipse cx="${f(px+40)}" cy="-10" rx="26" ry="14" fill="${CATC}" stroke="${EDGE}" stroke-width="3"/>`;
+  const hx = -62 - 30*stretch, hy = -70 - 60*lift + 18*stretch, rot = -14*yawn + 6*stretch;
+  const hs = 1 + .08*yawn;
+  g += `<g transform="translate(${f(hx)} ${f(hy)}) rotate(${f(rot)}) scale(${f3(hs)})">${catHead(o)}</g>`;
+  return g;
+}
+function catMouthLocal(o){ const {yawn=0, lift=0, stretch=0} = o; const hx = -62 - 30*stretch, hy = -70 - 60*lift + 18*stretch, r = (-14*yawn + 6*stretch)*Math.PI/180, hs = 1+.08*yawn, d = (14 + (4+30*yawn)*.8)*hs;
+  return [hx - Math.sin(r)*d, hy + Math.cos(r)*d, (6+18*yawn)*hs, (4+30*yawn)*hs]; }
+
+/* ---------- Canelo, el perrito (origen: centro inferior) ---------- */
+function dogHead(o){
+  const y = o.yawn||0; let h = '';
+  h += G('rotate(18 -50 -10)', P('M-62 -40 Q-80 -34 -78 10 Q-76 40 -56 36 Q-44 20 -42 -30Z', DOGD, 4));
+  h += G('rotate(-18 50 -10)', P('M62 -40 Q80 -34 78 10 Q76 40 56 36 Q44 20 42 -30Z', DOGD, 4));
+  h += `<circle cx="0" cy="0" r="60" fill="${DOGC}" stroke="${EDGE}" stroke-width="4"/>`;
+  h += `<path d="${blob(24,-24,20,77,.1,8,16)}" fill="#C58A52"/>`;
+  if(y > .45 || o.closed){ h += `<path d="M-32 -10 Q-22 -2 -12 -10 M12 -10 Q22 -2 32 -10" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/>`; }
+  else { h += `<circle cx="-22" cy="-10" r="8" fill="${INK}"/><circle cx="22" cy="-10" r="8" fill="${INK}"/><circle cx="-19" cy="-13" r="2.6" fill="#fff"/><circle cx="25" cy="-13" r="2.6" fill="#fff"/>`; }
+  h += `<ellipse cx="0" cy="${f(22 + 6*y)}" rx="${f(32+4*y)}" ry="${f(24+10*y)}" fill="#FBF3E1" stroke="${EDGE}" stroke-width="3"/>`;
+  h += `<ellipse cx="0" cy="10" rx="11" ry="8" fill="${INK}"/><circle cx="-3" cy="7" r="2.5" fill="#fff" opacity=".7"/>`;
+  if(y > .04){ const rx = 7+16*y, ry = 3+24*y; h += `<ellipse cx="0" cy="${f(24+ry*.8)}" rx="${f(rx)}" ry="${f(ry)}" fill="${MOUTHC}"/><ellipse cx="0" cy="${f(24+ry*1.35)}" rx="${f(rx*.6)}" ry="${f(ry*.4)}" fill="${TONGUE}"/>`; }
+  else h += `<path d="M0 18 L0 26 M-12 28 Q-6 34 0 26 Q6 34 12 28" stroke="${INK}" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+  return h;
+}
+function dogFigure(o){
+  const {yawn=0, tilt=0, wag=1} = o; let g = '';
+  const tw = 18*Math.sin(TM*9)*wag;
+  const tail = `M52 -30 Q100 -40 ${f(96+tw)} ${f(-95)}`;
+  g += `<path d="${tail}" stroke="${EDGE}" stroke-width="26" fill="none" stroke-linecap="round"/><path d="${tail}" stroke="${DOGC}" stroke-width="18" fill="none" stroke-linecap="round"/>`;
+  g += `<ellipse cx="0" cy="4" rx="80" ry="12" fill="#2a1705" opacity=".2"/>`;
+  g += P(blob(-48,-18,34,71,.06,8,20), DOGC, 3) + P(blob(48,-18,34,72,.06,8,20), DOGC, 3);
+  g += P(blob(0,-78,64,73,.05,10,80), DOGC, 4);
+  g += `<path d="${blob(0,-72,32,74,.08,8,46)}" fill="#FBF3E1"/>`;
+  g += P('M-30 -60 L-10 -60 L-10 0 L-30 0Z', DOGC, 3) + P('M10 -60 L30 -60 L30 0 L10 0Z', DOGC, 3);
+  g += `<path d="M-22 -6 l0 6 M-16 -6 l0 6 M16 -6 l0 6 M22 -6 l0 6" stroke="${DOGD}" stroke-width="2.5"/>`;
+  g += `<path d="M-40 -140 Q0 -128 40 -140" stroke="${CORAL}" stroke-width="12" fill="none" stroke-linecap="round"/>` + C(0,-128,7,MUST,2);
+  const hs = 1 + .12*yawn;
+  g += `<g transform="translate(0 -185) rotate(${f(tilt - 10*yawn)} 0 40) scale(${f3(hs)})">${dogHead(o)}</g>`;
+  return g;
+}
+
+/* ---------- la niña dueña de Canelo ---------- */
+function ownerFigure(o){
+  const {yawn=0} = o; let g = '';
+  const st = yawn; // estirarse
+  g += `<ellipse cx="0" cy="4" rx="70" ry="11" fill="#2a1705" opacity=".2"/>`;
+  g += P('M-26 -90 L-10 -90 L-10 -6 L-26 -6Z', '#5B4A8A', 3) + P('M10 -90 L26 -90 L26 -6 L10 -6Z', '#5B4A8A', 3);
+  g += P('M-44 -12 Q-44 2 -12 2 L-8 -12Z', '#7A4A2E', 3) + P('M44 -12 Q44 2 12 2 L8 -12Z', '#7A4A2E', 3);
+  const arm = (sx) => { const a = (sx<0 ? 200 : -20) + (sx<0 ? 70 : -70)*st; const ar = a*Math.PI/180; const x0 = 40*sx, y0 = -200, x1 = x0 + Math.cos(ar)*70*(sx<0?1:1), y1 = y0 + Math.sin(ar)*70;
+    const xa = x0 + (sx<0 ? -1 : 1)*0, ya = y0; const ang = sx<0 ? lerp(110, 215, st) : lerp(70, -35, st); const rr = ang*Math.PI/180;
+    const ex = xa + Math.cos(rr)*78, ey = ya + Math.sin(rr)*78;
+    return `<path d="M${f(xa)} ${f(ya)} L${f(ex)} ${f(ey)}" stroke="${EDGE}" stroke-width="26" stroke-linecap="round"/><path d="M${f(xa)} ${f(ya)} L${f(ex)} ${f(ey)}" stroke="${MUST}" stroke-width="19" stroke-linecap="round"/>` + C(ex, ey, 11, SKIN, 3); };
+  g += arm(-1) + arm(1);
+  g += P('M-34 -222 L34 -222 L64 -86 Q0 -74 -64 -86Z', MUST, 4);
+  g += `<path d="M-50 -110 Q0 -100 50 -110" stroke="#D29A2E" stroke-width="5" fill="none"/>`;
+  let h = '';
+  for(let i=0;i<9;i++){ const a = Math.PI + i/8*Math.PI; h += `<circle cx="${f(Math.cos(a)*52)}" cy="${f(Math.sin(a)*50 - 2)}" r="22" fill="#5A3A24" stroke="${EDGE}" stroke-width="3"/>`; }
+  h += `<circle cx="0" cy="4" r="50" fill="${SKIN}" stroke="${EDGE}" stroke-width="3"/>`;
+  h += `<path d="M-44 -14 Q-20 -40 0 -24 Q20 -40 44 -14 Q30 -48 0 -50 Q-30 -48 -44 -14Z" fill="#5A3A24"/>`;
+  h += `<circle cx="-30" cy="20" r="9" fill="#F29A96" opacity=".85"/><circle cx="30" cy="20" r="9" fill="#F29A96" opacity=".85"/>`;
+  h += eyesMouth(17, 2, 1, {yawn, my: 22});
+  g += `<g transform="translate(0 -270) rotate(${f(-8*yawn)})">${h}</g>`;
+  return g;
+}
+
+/* ---------- chimpancé ---------- */
+function chimpFigure(o){
+  const y = o.yawn||0; let g = '';
+  g += P('M-10 -40 Q-60 -150 -30 -250', 'none', 0);
+  g += `<path d="M30 -52 Q40 -150 20 -236" stroke="${EDGE}" stroke-width="34" fill="none" stroke-linecap="round"/><path d="M30 -52 Q40 -150 20 -236" stroke="${CHIMP}" stroke-width="26" fill="none" stroke-linecap="round"/>` + C(20,-240,16,CHIMPF,3);
+  g += P(blob(0,40,70,91,.06,10,60), CHIMP, 4);
+  g += C(-68,-6,24,CHIMP,4) + C(68,-6,24,CHIMP,4) + `<circle cx="-68" cy="-6" r="13" fill="${CHIMPF}"/><circle cx="68" cy="-6" r="13" fill="${CHIMPF}"/>`;
+  g += P(blob(0,-8,66,92,.05,10,62), CHIMP, 4);
+  g += `<path d="M-40 -30 Q-40 -52 -18 -46 Q0 -40 18 -46 Q40 -52 40 -30 Q48 10 30 34 Q0 52 -30 34 Q-48 10 -40 -30Z" fill="${CHIMPF}"/>`;
+  if(y > .45){ g += `<path d="M-26 -26 Q-18 -20 -10 -26 M10 -26 Q18 -20 26 -26" stroke="${INK}" stroke-width="4" fill="none" stroke-linecap="round"/>`; }
+  else g += `<circle cx="-18" cy="-24" r="6.5" fill="${INK}"/><circle cx="18" cy="-24" r="6.5" fill="${INK}"/><circle cx="-16" cy="-26" r="2" fill="#fff"/><circle cx="20" cy="-26" r="2" fill="#fff"/>`;
+  g += `<circle cx="-5" cy="-4" r="2.6" fill="#5A3A24"/><circle cx="5" cy="-4" r="2.6" fill="#5A3A24"/>`;
+  if(y > .04){ const rx = 10+16*y, ry = 4+22*y; g += `<ellipse cx="0" cy="${f(12+ry*.9)}" rx="${f(rx)}" ry="${f(ry)}" fill="${MOUTHC}"/><ellipse cx="0" cy="${f(12+ry*1.45)}" rx="${f(rx*.6)}" ry="${f(ry*.35)}" fill="${TONGUE}"/>`; }
+  else g += `<path d="M-14 16 Q0 26 14 16" stroke="${INK}" stroke-width="3.5" fill="none" stroke-linecap="round"/>`;
+  return g;
+}
+
+/* ---------- el cerebro de papel ---------- */
+function brainFigure(o){
+  const y = o.yawn||0; let g = '';
+  if(o.glow > 0) g += `<circle cx="0" cy="0" r="230" fill="url(#halo)" opacity="${f3(o.glow*.8)}"/>`;
+  g += P(blob(0,0,150,321,.07,14,108), '#F4A7B0', 4);
+  g += `<path d="M0 -104 Q-10 -40 6 0 Q-8 40 0 104" stroke="#D9788A" stroke-width="6" fill="none" opacity=".75"/>`;
+  g += `<path d="M-110 -40 q24 -26 48 -4 t44 -12 M-120 30 q30 -18 50 4 t30 10 M30 -70 q30 -12 44 12 t40 6 M28 50 q24 -24 50 -2 t44 -8 M-80 -80 q16 16 38 2" stroke="#D9788A" stroke-width="6" fill="none" stroke-linecap="round" opacity=".75"/>`;
+  g += `<circle cx="-62" cy="40" r="14" fill="#F07C8A" opacity=".6"/><circle cx="62" cy="40" r="14" fill="#F07C8A" opacity=".6"/>`;
+  g += eyesMouth(34, 8, 1.35, {yawn: y, my: 36});
+  return g;
+}
+
+/* ================== ESCENAS ================== */
+/* ---------- 1 y 7: la pared amarilla con los dos dibujos ---------- */
+const DRAW_CAT = [272, 770], DRAW_DOG = [505, 730];
+function catDrawing(yw){
+  let d = P(rrect(-118,-104,236,208,11,3), '#FBF3E1', 4);
+  d += `<path d="${rrect(-102,-88,204,176,12,2)}" fill="${LAV}"/>`;
+  d += `<circle cx="60" cy="-50" r="18" fill="#FFF4D6"/><circle cx="68" cy="-56" r="15" fill="${LAV}"/>`;
+  d += `<ellipse cx="0" cy="58" rx="86" ry="22" fill="${CORAL}"/>`;
+  d += G('translate(4 64) scale(.62)', catFigure({yawn: yw, sleep: yw>0.05?0:1, lift: yw>0.05?.5:0}));
+  d += C(0, -94, 9, CORAL, 3);
+  return d;
+}
+function dogDrawing(yw){
+  let d = P(rrect(-126,-142,252,284,13,3), '#FBF3E1', 4);
+  d += `<path d="${rrect(-110,-126,220,252,14,2)}" fill="#BFE0D4"/>`;
+  d += `<path d="M-110 70 Q-40 44 20 66 Q70 50 110 62 L110 126 L-110 126Z" fill="${TEAL}"/>`;
+  d += `<path d="${blob(-50,-80,30,15,.1,8,14)}" fill="#fff"/>`;
+  d += G('translate(0 108) scale(.72)', dogFigure({yawn: yw, wag: 1}));
+  d += C(0, -134, 9, CORAL, 3);
+  return d;
+}
+function wall(t, withTitle){
+  let g = '';
+  g += rough(`<rect x="60" y="270" width="920" height="1060" fill="${MUST}"/>` +
+    [0,1,2,3,4,5].map(i=>`<path d="${blob(200+ (i%3)*300, 380+Math.floor(i/3)*520, 210, 600+i, .18, 9, 70)}" fill="${i%2?'#F1C862':'#DCA73E'}" opacity=".45"/>`).join(''));
+  g += crayon([0,1,2,3].map(i=>`<path d="M${170+i*190} ${1150+ (i%2)*40} q20 -18 40 0 t40 0" stroke="#F4D588" stroke-width="7" fill="none" opacity=".8"/>`).join(''));
+  // bostezos de los dibujos: escena 1 (al decir "bostezo?" y "ganas") y escena 7 (al decir "copia" y "bostezos")
+  const ycat = t < S2.start ? yawnEnv(t, WT(1,'bostezo',1)-0.1, 1.3) : yawnEnv(t, WT(7,'copia')-0.15, 1.2);
+  const ydog = t < S2.start ? yawnEnv(t, WT(1,'seguro')+0.1, 1.4) : yawnEnv(t, WT(7,'bostezos')+0.05, 1.3);
+  const pc = t < S2.start ? 0 : kf(t,[[WT(7,'copia')-0.3,0],[WT(7,'copia'),1],[WT(7,'copia')+0.8,0]]);
+  const pd = kf(t,[[WT(1,'seguro')-0.1,0],[WT(1,'seguro')+0.2,1],[WT(1,'ganas',0,true),0]]) + (t < S2.start ? 0 : kf(t,[[WT(7,'bostezos')-0.1,0],[WT(7,'bostezos')+0.2,1],[WT(7,'bostezos')+1.0,0]]));
+  const pcat = kf(t,[[WT(1,'bostezo',1)-0.2,0],[WT(1,'bostezo',1)+0.1,1],[WT(1,'bostezo',1)+1.0,0]]) + pc;
+  g += G(`translate(${f(DRAW_CAT[0]+jit(1))} ${f(DRAW_CAT[1]+jit(2))}) rotate(${f(-6 + 3*Math.sin(TM*9)*pcat)}) scale(${f3(1+.1*pcat)})`, paper(catDrawing(ycat)));
+  g += G(`translate(${f(DRAW_DOG[0]+jit(3))} ${f(DRAW_DOG[1]+jit(4))}) rotate(${f(4 + 3*Math.sin(TM*9)*pd)}) scale(${f3(1+.1*pd)})`, paper(dogDrawing(ydog)));
+  // hilito de crayón con corazón entre los dos dibujos (escena 7)
+  const fadeEnd = 1 - prog(t, TL.duration-1.7, TL.duration-0.9);
+  if(t > S7.start && fadeEnd > 0){
+    const ph = easeOut(prog(t, WT(7,'hilito')-0.2, WT(7,'une',0,true)+0.1)) * fadeEnd;
+    if(ph>0){ g += crayon(`<path d="M${DRAW_CAT[0]+30} 880 Q390 ${f(1010+6*Math.sin(TM*3))} ${DRAW_DOG[0]-20} 876" stroke="${CORAL}" stroke-width="9" fill="none" stroke-linecap="round" pathLength="1" stroke-dasharray="1 1" stroke-dashoffset="${f3(1-ph)}"/>`);
+      const hp = back(prog(t, WT(7,'une')-0.05, WT(7,'une')+0.35)); if(hp*fadeEnd>0.01) g += paper(heart(392, 948 + 4*Math.sin(TM*5), .9*hp*fadeEnd*(1+.06*Math.sin(TM*7))));
+    }
+  }
+  // cajita de crayones
+  let box = '';
+  ['#E8534A','#F2C94C','#2F6FD6','#3FA796','#7B5BB5'].forEach((c,i)=>{ box += P(`M${-52+i*24} -40 L${-40+i*24} -40 L${-40+i*24} ${-96+ (i%2)*14} L${-46+i*24} ${-108+(i%2)*14} L${-52+i*24} ${-96+(i%2)*14}Z`, c, 3); });
+  box += P('M-66 -52 L66 -52 L60 0 L-60 0Z', CORAL, 4) + `<path d="M-40 -30 q10 -10 20 0 t20 0 t20 0 t20 0" stroke="${MUST}" stroke-width="5" fill="none"/>`;
+  g += G(`translate(${f(250+jit(5))} ${f(1300)}) rotate(-3)`, paper(box));
+  // título en crayón
+  if(withTitle){
+    const p1 = easeOut(prog(t, .25, 1.55)), p2 = easeOut(prog(t, 1.45, 2.35));
+    if(p1>0){
+      g += `<clipPath id="tc1"><rect x="150" y="370" width="${f(740*p1)}" height="100"/></clipPath><clipPath id="tc2"><rect x="270" y="470" width="${f(500*p2)}" height="110"/></clipPath>`;
+      const txt = (s,y,id,sz) => `<text x="520" y="${y}" text-anchor="middle" clip-path="url(#${id})" font-family="Gaegu" font-weight="700" font-size="${sz}" fill="#234FA0" stroke="#234FA0" stroke-width="2.5" stroke-linejoin="round">${s}</text>`;
+      g += crayon(G(`translate(${f(jit(7,1))} ${f(jit(8,1))}) rotate(-2 520 470)`, txt('¿Por qué se contagian', 450, 'tc1', 72) + txt('los bostezos?', 546, 'tc2', 86)));
+      const p3 = easeOut(prog(t, 2.2, 2.8));
+      if(p3>0) g += crayon(`<path d="M340 572 q90 -12 180 -4 t180 -2" stroke="${CORAL}" stroke-width="9" fill="none" stroke-linecap="round" pathLength="1" stroke-dasharray="1 1" stroke-dashoffset="${f3(1-p3)}"/>`);
+    }
+  }
+  return g;
+}
+
+/* ---------- 2: el cuarto de Mishi ---------- */
+const CAT2 = {x: 470, y: 1080, s: 1.3};
+function catState2(t){
+  const tw = WT(2,'bostezar');
+  const sleep = t < tw ? 1 : 0;
+  const lift = ease(prog(t, tw, tw+0.5));
+  const yawn = Math.max(yawnEnv(t, WT(2,'abrir')-0.1, WT(2,'aire',0,true)+0.45-(WT(2,'abrir')-0.1)), easeOut(prog(t, T23[0]-0.35, T23[0]+0.05)));
+  const stretch = kf(t, [[WT(2,'como')-0.1,0],[WT(2,'como')+0.4,1],[WT(2,'despertar',0,true),1],[WT(2,'despertar',0,true)+0.5,0]]);
+  return {yawn, sleep, lift, stretch};
+}
+function catMouthWorld(t){ const o = catState2(t), m = catMouthLocal(o); return [CAT2.x + m[0]*CAT2.s, CAT2.y + m[1]*CAT2.s, m[2]*CAT2.s, m[3]*CAT2.s]; }
+function scene2(t){
+  let g = rough(`<rect x="60" y="270" width="920" height="1060" fill="${LAV}"/>` + Array.from({length:30},(_,i)=>`<circle cx="${f(100+(i%6)*170+(Math.floor(i/6)%2)*85)}" cy="${f(330+Math.floor(i/6)*150)}" r="9" fill="#C9B8E6"/>`).join(''));
+  // ventana con amanecer
+  const sunUp = prog(t, S2.start-0.5, S2.end);
+  let win = P(rrect(-130,-140,260,280,21,3), '#FBF3E1', 5) + `<path d="${rrect(-112,-122,224,244,22,2)}" fill="${DAWN}"/>`;
+  win += `<g clip-path="url(#winclip)"><circle cx="20" cy="${f(90-110*sunUp)}" r="46" fill="#F6C343"/>` + face(20, 90-110*sunUp+4, 1.4, sunUp>.35?'happy':'sleepy') + `<path d="M-112 80 Q-40 56 30 76 Q80 62 112 72 L112 122 L-112 122Z" fill="${TEAL}"/></g>`;
+  win += `<path d="M0 -122 L0 122 M-112 0 L112 0" stroke="#FBF3E1" stroke-width="10"/>`;
+  g += `<clipPath id="winclip"><rect x="-112" y="-122" width="224" height="244"/></clipPath>`;
+  g += G(`translate(${f(700+jit(21))} ${f(520+jit(22))}) rotate(2)`, paper(win));
+  // cortinitas de la ventana
+  g += paper(P('M560 370 L610 370 Q600 520 580 680 L556 680Z', CORAL, 3) + P('M840 370 L790 370 Q800 520 820 680 L844 680Z', CORAL, 3));
+  // piso
+  g += paper(P('M60 1150 L990 1150 L990 1330 L60 1330Z', '#D8B98C', 4) + `<path d="M60 1200 L990 1202 M60 1255 L990 1253" stroke="#B8966A" stroke-width="4"/>`);
+  // cola misteriosa detrás del cojín (bucle abierto)
+  const tq = WT(2,'final'), pt = easeOut(prog(t, tq-0.2, tq+0.5));
+  if(pt>0){ const wg = 18*Math.sin(TM*10); const tl = `M640 1090 Q${f(676)} ${f(1090-80*pt)} ${f(660+wg)} ${f(1090-150*pt)}`;
+    g += paper(`<path d="${tl}" stroke="${EDGE}" stroke-width="30" fill="none" stroke-linecap="round"/><path d="${tl}" stroke="${DOGC}" stroke-width="22" fill="none" stroke-linecap="round"/>`);
+    g += qmark(690, 860, 1.3, '#234FA0', prog(t, WT(2,'quien')-0.1, WT(2,'quien')+0.3)); }
+  // cojín
+  g += paper(P(blob(470, 1085, 200, 61, .04, 12, 52), CORAL, 4) + `<path d="M300 1085 Q470 1060 640 1085" stroke="#C95A53" stroke-width="5" fill="none"/>` + C(290,1070,12,MUST,3) + C(650,1070,12,MUST,3));
+  // Mishi
+  const o = catState2(t);
+  g += G(`translate(${f(CAT2.x+jit(23,1))} ${f(CAT2.y)}) scale(${f3(CAT2.s)})`, paper(catFigure(o)));
+  // espirales de aire que entran a la boca
+  const pa = prog(t, WT(2,'tomar')-0.1, WT(2,'aire',0,true)+0.5);
+  if(pa>0 && pa<1){ const [mx,my] = catMouthWorld(t); let a='';
+    for(let i=0;i<6;i++){ const u = clamp(pa*1.5 - i*.08); if(u<=0||u>=1) continue; const ang = i/6*Math.PI*2 + u*3; const R = 260*(1-u)+20;
+      const x = mx + Math.cos(ang)*R, y = my + Math.sin(ang)*R*.75; const x2 = mx + Math.cos(ang+.5)*(R*.85), y2 = my + Math.sin(ang+.5)*R*.7;
+      a += `<path d="M${f(x)} ${f(y)} Q${f((x+x2)/2+20)} ${f((y+y2)/2-20)} ${f(x2)} ${f(y2)}" stroke="#FFFDF6" stroke-width="${f(14*(1-u)+4)}" fill="none" stroke-linecap="round"/>`; }
+    g += paper(a); }
+  // burbujitas de sueño (antes de despertar)
+  if(t < WT(2,'bostezar')+0.3){ let z=''; for(let i=0;i<3;i++){ const u = ((t*0.8 + i/3) % 1); z += C(330 - 40*u + 10*Math.sin(u*9), 930 - 160*u - i*6, 8 + 14*u, '#FFFDF6', 3); } g += paper(z); }
+  return g;
+}
+
+/* ---------- 3: el cerebro copia ---------- */
+const TV = [345, 600], BRAIN = [545, 900];
+function scene3(t){
+  let g = rough(`<rect x="60" y="270" width="920" height="1060" fill="#F9DCD6"/>` + Array.from({length:22},(_,i)=>`<path d="${blob(100+H(i+30)*820, 320+H(i+31)*980, 18+H(i+32)*20, 900+i, .15, 7)}" fill="#FCE9E4"/>`).join(''));
+  // la tele de papel con Coral
+  const tvIn = back(prog(t, S3.start-0.3, S3.start+0.3));
+  const yc = yawnEnv(t, WT(3,'bostezar')-0.15, 1.4);
+  let tv = P(rrect(-150,-128,300,256,31,3), KRAFT, 5) + `<path d="${rrect(-128,-106,256,212,32,2)}" fill="#FFF4E0"/>`;
+  tv += `<path d="M-60 -128 L-100 -190 M60 -128 L100 -190" stroke="#7A5230" stroke-width="7" stroke-linecap="round"/>` + C(-100,-190,10,MUST,3) + C(100,-190,10,MUST,3);
+  tv += confettiChar(0, 14, 66, CORAL, {yawn: yc, seed: 3});
+  g += G(`translate(${f(TV[0]+jit(31))} ${f(TV[1]+jit(32))}) rotate(-3) scale(${f3(Math.max(.01,tvIn)*.86)})`, paper(tv));
+  // línea punteada de los ojos al cerebro
+  const pl = easeOut(prog(t, WT(3,'tu')-0.1, WT(3,'copia')+0.1));
+  if(pl>0){ let d=''; const N=16; for(let i=0;i<N;i++){ const u=i/(N-1); if(u>pl) break; const x=(1-u)*(1-u)*(TV[0]+125)+2*(1-u)*u*620+u*u*BRAIN[0]+10*u, y=(1-u)*(1-u)*(TV[1]+20)+2*(1-u)*u*640+u*u*(BRAIN[1]-140); d += `<circle cx="${f(x)}" cy="${f(y)}" r="8" fill="#234FA0"/>`; } g += crayon(d); }
+  // cerebro
+  const bIn = back(prog(t, S3.start+0.2, S3.start+0.8));
+  const yb = yawnEnv(t, WT(3,'sin')-0.15, WT(3,'permiso',0,true)+0.35-(WT(3,'sin')-0.15));
+  const glow = kf(t, [[WT(3,'copia')-0.1,0],[WT(3,'copia')+0.3,1],[WT(3,'permiso',0,true)+0.4,1],[WT(3,'permiso',0,true)+0.9,0]]);
+  const tr = WT(3,'raro')-0.5, wob = t>tr ? Math.sin((t-tr)*20)*6*clamp(1-(t-tr)/1.2) : 0;
+  g += G(`translate(${f(BRAIN[0]+jit(33))} ${f(BRAIN[1]+jit(34))}) rotate(${f(wob)}) scale(${f3(Math.max(.01,bIn)*(1+.06*yb))})`, paper(brainFigure({yawn: yb, glow})));
+  // chispitas de "copiar"
+  const tc = WT(3,'copia'); let sp='';
+  for(let i=0;i<9;i++){ const ts = tc - 0.1 + i*0.07; const u = prog(t, ts, ts+0.35); const fade = 1-prog(t, WT(3,'permiso',0,true)+0.2, WT(3,'permiso',0,true)+0.7); if(u<=0||fade<=0) continue; const a = i/9*Math.PI*2 - Math.PI/2; const R = 200 + 12*Math.sin(TM*6+i);
+    sp += star4(BRAIN[0]+Math.cos(a)*R, BRAIN[1]+Math.sin(a)*R*.78, 16*back(u)*fade+.1, i%2?MUST:'#FFF3C4', TM*60+i*20); }
+  g += paper(sp);
+  // signos de pregunta en "lo más raro"
+  g += qmark(330, 870, 1.2, '#234FA0', prog(t, tr+0.1, tr+0.4));
+  g += qmark(760, 700, 1.0, CORAL, prog(t, tr+0.3, tr+0.6));
+  g += qmark(700, 1070, 0.9, TEAL, prog(t, tr+0.5, tr+0.8));
+  return g;
+}
+
+/* ---------- 4: Coral y Teo ---------- */
+const CORAL4 = [280, 820], TEO4 = [560, 820], STR4 = [770, 560];
+const FAM4 = [[190,1110,54,MUST,11],[300,1140,38,CREAM,12]], FRI4 = [[450,1120,46,'#F29A96',13],[575,1130,46,'#2F8C7C',14]];
+function scene4(t){
+  let g = rough(`<rect x="60" y="270" width="920" height="1060" fill="#DFF0E8"/>`);
+  for(let i=0;i<3;i++){ const x = 1000 - ((t*18 + i*360) % 1150), y = 380 + i*40; g += paper(`<path d="${blob(x, y, 66, 830+i, .14, 10, 24)}" fill="#FFFDF6"/>`); }
+  g += paper(P('M60 640 Q260 560 480 620 Q700 520 990 600 L990 1330 L60 1330Z', '#A9D9C6', 4));
+  // el desconocido, lejos en la colina
+  const ts = WT(4,'desconocidos');
+  const blinkS = t > ts+0.3 && t < ts+0.45;
+  g += paper(confettiChar(STR4[0], STR4[1]-36, 34, LAV, {seed: 21, closed: blinkS, dots: true}));
+  if(t > ts+0.5){ let d=''; for(let i=0;i<3;i++){ const u = prog(t, ts+0.5+i*0.15, ts+0.7+i*0.15); if(u>0) d += C(STR4[0]-22+i*22, STR4[1]-110, 6*back(u), '#FFFDF6', 2); } g += paper(d); }
+  g += paper(P('M60 980 Q300 920 540 970 Q760 930 990 960 L990 1330 L60 1330Z', '#7CC4A8', 4) + P('M60 1170 Q300 1130 560 1165 Q780 1140 990 1160 L990 1330 L60 1330Z', TEAL, 4));
+  // olas de bostezo: de Coral a Teo (grande) y hacia el desconocido (chiquita)
+  const tw0 = WT(4,'bosteza')+0.35; let wv='';
+  for(let k=0;k<3;k++){ const u = prog(t, tw0 + k*0.12, tw0 + 0.75 + k*0.12); if(u<=0||u>=1) continue; const x = lerp(CORAL4[0]+90, TEO4[0]-90, u), y = 820 + 10*Math.sin(u*6);
+    wv += `<path d="M${f(x)} ${f(y-34)} Q${f(x+18)} ${f(y)} ${f(x)} ${f(y+34)}" stroke="#FFFDF6" stroke-width="10" fill="none" stroke-linecap="round" opacity="${f3(1-u*.3)}"/>`; }
+  for(let k=0;k<2;k++){ const u = prog(t, ts-0.7 + k*0.15, ts + 0.2 + k*0.15); if(u<=0||u>=1) continue; const x = lerp(TEO4[0]+60, STR4[0]-40, u), y = lerp(760, STR4[1]-30, u);
+    wv += `<path d="M${f(x)} ${f(y-14)} Q${f(x+8)} ${f(y)} ${f(x)} ${f(y+14)}" stroke="#FFFDF6" stroke-width="6" fill="none" stroke-linecap="round" opacity="${f3(.8*(1-u))}"/>`; }
+  g += paper(wv);
+  // hilo con corazón
+  const pc = easeOut(prog(t, WT(4,'conectamos')-0.35, WT(4,'conectamos')+0.5));
+  if(pc>0){ g += crayon(`<path d="M${CORAL4[0]+40} 900 Q420 ${f(1000+5*Math.sin(TM*3))} ${TEO4[0]-40} 900" stroke="${CORAL}" stroke-width="9" fill="none" stroke-linecap="round" pathLength="1" stroke-dasharray="1 1" stroke-dashoffset="${f3(1-pc)}"/>`);
+    const hp = back(prog(t, WT(4,'conectamos')+0.3, WT(4,'conectamos')+0.7)); if(hp>0.01) g += paper(heart(420, 944, .95*hp*(1+.07*Math.sin(TM*7)))); }
+  // Coral y Teo: caen como confeti y se vuelven personajes
+  const chars = [[CORAL4, CORAL, WT(4,'coral')-0.1, yawnEnv(t, WT(4,'bosteza')-0.1, 1.3), 1], [TEO4, TEAL, WT(4,'coral')+0.15, yawnEnv(t, WT(4,'teo')-0.05, 1.3), 2]];
+  let cs = '';
+  const bounce = (t0) => t > WT(4,'conectamos') && t < WT(4,'demas',0,true)+0.2 ? -14*Math.abs(Math.sin((t-t0)*7)) : 0;
+  chars.forEach(([pos, col, tl, yw, sd]) => {
+    const tf0 = S4.start - 0.25 + (sd-1)*0.2;
+    if(t < tl){ const u = prog(t, tf0, tl); if(u>0) cs += fallingConfetti(pos[0] + 30*Math.sin(u*7+sd), lerp(250, pos[1], easeIn(u)), 1, col, u*540 + sd*40); }
+    else { const pop = back(prog(t, tl, tl+0.3)); cs += G(`translate(${pos[0]} ${f(pos[1]+bounce(sd*.2))}) scale(${f3(.35+.65*pop)})`, confettiChar(0, 0, 84, col, {yawn: yw, seed: sd})); }
+  });
+  // familia y amigos: aparecen y se contagian en cadena
+  [[FAM4, WT(4,'familia')], [FRI4, WT(4,'amigos')]].forEach(([grp, tw]) => grp.forEach(([x,y,r,col,sd], i) => {
+    const pop = back(prog(t, tw-0.25+i*0.1, tw+0.1+i*0.1)); if(pop<=0.01) return;
+    cs += G(`translate(${x} ${y}) scale(${f3(pop)})`, confettiChar(0, 0, r, col, {yawn: yawnEnv(t, tw+0.25+i*0.18, 1.1), seed: sd}));
+  }));
+  g += paper(cs);
+  return g;
+}
+
+/* ---------- 5 y 6: el parque con Canelo ---------- */
+const GIRL = [300, 1150], DOG = [540, 1165], SI = [300, 520], NO = [640, 520], CLOCK = [470, 530];
+function park(t, bright){
+  let g = rough(`<rect x="60" y="270" width="920" height="1060" fill="url(#${bright?'goldP':'duskP'})"/>`);
+  for(let i=0;i<3;i++){ const x = 1000 - ((t*15 + i*330) % 1100), y = 390 + i*28; g += paper(`<path d="${blob(x, y, 70, 840+i, .14, 10, 26)}" fill="#FFF4E6"/>`); }
+  const sy = bright ? 930 : 990;
+  let sun=''; for(let i=0;i<10;i++){ const a=i/10*Math.PI*2+TM*.3; sun += P(`M${f(Math.cos(a-.15)*74)} ${f(Math.sin(a-.15)*74)} L${f(Math.cos(a)*104)} ${f(Math.sin(a)*104)} L${f(Math.cos(a+.15)*74)} ${f(Math.sin(a+.15)*74)}Z`, '#F6B94A', 3); }
+  sun += C(0,0,72,'#F6A53A') + face(0, 4, 2.4, 'happy');
+  // rama de árbol (arriba a la derecha)
+  g += paper(P('M990 380 Q860 400 700 430 Q640 440 610 420 Q640 460 700 455 Q860 430 990 430Z', '#8C5D34', 4) +
+    [0,1,2,3,4].map(i=>`<path d="${blob(640+i*80, 400+(i%2)*30, 48, 860+i, .12, 9, 34)}" fill="${i%2?TEAL:'#2F8C7C'}" stroke="${EDGE}" stroke-width="4"/>`).join(''));
+  g += paper(P('M60 1060 Q260 1000 480 1050 Q720 990 990 1040 L990 1330 L60 1330Z', bright?'#8FCB8A':'#6FAF86', 4) + P('M60 1200 Q320 1160 560 1195 Q780 1170 990 1190 L990 1330 L60 1330Z', TEAL, 4));
+  let tf=''; for(let i=0;i<8;i++){ const x=110+i*110, y=1110+(i%3)*45; tf += `<path d="M${x} ${y} l-8 -22 M${x} ${y} l0 -26 M${x} ${y} l8 -22" stroke="#2F8C7C" stroke-width="5" stroke-linecap="round"/>`; }
+  g += crayon(tf);
+  return g;
+}
+function scene5(t){
+  let g = park(t, false);
+  const tilt = kf(t, [[WT(5,'perrito')-0.1,0],[WT(5,'perrito')+0.3,16],[WT(5,'no',0,true)+0.3,16],[WT(5,'dilo'),-12],[S5.end,-12]]);
+  g += G(`translate(${GIRL[0]} ${GIRL[1]})`, paper(ownerFigure({yawn: 0})));
+  g += G(`translate(${DOG[0]+jit(51,1)} ${DOG[1]}) scale(1.05)`, paper(dogFigure({tilt, wag: .6})));
+  g += qmark(DOG[0]+40, 820, 1.2, '#234FA0', prog(t, WT(5,'perrito')+0.1, WT(5,'perrito')+0.45));
+  // opciones en crayón
+  const pa = prog(t, WT(5,'si')-0.2, WT(5,'si')+0.6), pn = prog(t, WT(5,'no')-0.1, WT(5,'no')+0.7);
+  if(pa>0){ g += crayon(scribble(SI[0], SI[1], 92, 72, TEAL, 51, pa));
+    g += `<clipPath id="la"><rect x="200" y="600" width="${f(220*easeOut(clamp(pa*1.3)))}" height="100"/></clipPath>` + crayon(`<text x="${SI[0]}" y="672" text-anchor="middle" clip-path="url(#la)" font-family="Gaegu" font-weight="700" font-size="76" fill="#1E6E60" stroke="#1E6E60" stroke-width="2">SÍ</text>`); }
+  if(pn>0){ g += crayon(scribble(NO[0], NO[1], 92, 72, CORAL, 61, pn));
+    g += `<clipPath id="ln"><rect x="540" y="600" width="${f(220*easeOut(clamp(pn*1.3)))}" height="100"/></clipPath>` + crayon(`<text x="${NO[0]}" y="672" text-anchor="middle" clip-path="url(#ln)" font-family="Gaegu" font-weight="700" font-size="76" fill="#B9443C" stroke="#B9443C" stroke-width="2">NO</text>`); }
+  // relojito tic-tac durante la pausa
+  const q = S5.quiz_pause, ct0 = q[0]-0.45;
+  const cp = back(prog(t, ct0, ct0+0.3)) * (1-prog(t, q[1]+0.05, q[1]+0.35));
+  if(cp>0.01){ const tick = Math.max(0, Math.floor((t-q[0])/0.375)+1), sw = (tick%2?1:-1)*7;
+    let c = P(blob(0,0,54,91,.03,12), '#FBF3E1', 4) + `<circle cx="0" cy="0" r="54" fill="none" stroke="${CORAL}" stroke-width="10"/>`;
+    for(let i=0;i<12;i++){ const a=i/12*Math.PI*2; c += `<circle cx="${f(Math.cos(a)*39)}" cy="${f(Math.sin(a)*39)}" r="3.5" fill="${NAVY}"/>`; }
+    const ha = -90 + tick*45; c += `<path d="M0 0 L${f(Math.cos(ha*Math.PI/180)*33)} ${f(Math.sin(ha*Math.PI/180)*33)}" stroke="${NAVY}" stroke-width="7" stroke-linecap="round"/><circle r="7" fill="${CORAL}"/>`;
+    c = C(-36,-52,15,MUST,3) + C(36,-52,15,MUST,3) + c;
+    g += G(`translate(${CLOCK[0]} ${CLOCK[1]}) rotate(${sw}) scale(${f3(cp)})`, paper(c));
+  }
+  return g;
+}
+function scene6(t){
+  let g = park(t, true);
+  // destellos
+  const tw = prog(t, S6.start-0.3, S6.start+0.4);
+  for(let i=0;i<12;i++){ const x=150+H(i+500)*680, y=330+H(i+520)*420; const s = tw*(.6+.4*Math.sin(TM*8+i*2)); if(s>0.05) g += star4(x,y,13*s+2,'#FFF3C4',TM*40+i*30); }
+  // chimpancé que baja de la rama
+  const tch = WT(6,'chimpances');
+  const cy = lerp(180, 600, back(prog(t, tch-0.45, tch+0.15)));
+  if(t > tch-0.45) g += G(`translate(${f(720+jit(61,1))} ${f(cy)}) scale(.9) rotate(${f(4*Math.sin(TM*3))})`, paper(chimpFigure({yawn: yawnEnv(t, WT(6,'tambien')-0.25, 1.3)})));
+  // la dueña bosteza y Canelo también
+  const yg = yawnEnv(t, WT(6,'bostezar')-0.1, 1.3);
+  const yd = yawnEnv(t, WT(6,'dueno')-0.05, 1.6);
+  g += G(`translate(${GIRL[0]} ${GIRL[1]})`, paper(ownerFigure({yawn: yg})));
+  g += G(`translate(${DOG[0]+jit(51,1)} ${DOG[1]}) scale(${f3(1.05*(1+.06*yd))})`, paper(dogFigure({yawn: yd, tilt: 0, wag: 1})));
+  // corazón: "su persona favorita"
+  const hp = back(prog(t, WT(6,'persona')-0.1, WT(6,'persona')+0.3));
+  if(hp>0.01){ g += paper(heart(425, 820 + 5*Math.sin(TM*4), 1.1*hp*(1+.08*Math.sin(TM*8))));
+    let hs=''; for(let i=0;i<4;i++){ const u = ((t - WT(6,'persona'))*0.6 + i/4) % 1; if(t < WT(6,'persona')) continue; hs += heart(380 + i*30 + 14*Math.sin(u*8+i), 800 - 180*u, .3*(1-u)+.05, i%2?CORAL:'#F29A96'); } g += paper(hs); }
+  // confeti en "¡Sí!"
+  const tc = WT(6,'si'); if(t>tc-0.1 && t<tc+2.8){ let c=''; for(let i=0;i<28;i++){ const x=130+H(i+800)*720, dt=t-tc+.1, y=290+dt*(250+140*H(i+820)) - 40*H(i+840); c += G(`translate(${f(x+Math.sin(dt*4+i)*20)} ${f(y)}) rotate(${f(dt*200*(H(i+860)-.5)*2+i*30)})`, `<rect x="-9" y="-6" width="18" height="12" fill="${[TEAL,CORAL,MUST,CREAM][i%4]}" stroke="${EDGE}" stroke-width="2"/>`); } g += paper(c); }
+  return g;
+}
+function scribble(cx,cy,rx,ry,color,seed,p){
+  const rnd=mulberry32(seed); const pts=[]; const n=15;
+  for(let i=0;i<=n;i++){ const yy=cy-ry*.92+(1.84*ry)*i/n; const w=rx*Math.sqrt(Math.max(0,1-((yy-cy)/ry)**2))*.92; pts.push([cx+(i%2?w:-w)+(rnd()-.5)*10, yy+(rnd()-.5)*8]); }
+  const d = 'M'+pts.map(q=>f(q[0])+' '+f(q[1])).join('L');
+  let g = `<path d="${d}" stroke="${color}" stroke-width="19" fill="none" stroke-linecap="round" stroke-linejoin="round" pathLength="1" stroke-dasharray="1 1" stroke-dashoffset="${f3(1-clamp(p*1.25))}" opacity=".85"/>`;
+  const po = clamp((p-.6)/.4);
+  if(po>0) g += `<path d="${blob(cx,cy,rx,seed+5,.08,10,ry)}" stroke="${color}" stroke-width="8" fill="none" pathLength="1" stroke-dasharray="1 1" stroke-dashoffset="${f3(1-po)}"/>`;
+  return g;
+}
+
+/* ---------- composición del fondo del escenario (cámara + transiciones) ---------- */
+function cam(cx,cy,s,rot=0){ return `translate(${WIN.cx} ${WIN.cy}) rotate(${f3(rot)}) scale(${f3(s)}) translate(${f(-cx)} ${f(-cy)})`; }
+function drift(t, k=1){ return {cx: WIN.cx + 9*Math.sin(TM*2*Math.PI/9)*k, cy: WIN.cy + 7*Math.cos(TM*2*Math.PI/11)*k, s: 1.03 + .018*Math.sin(TM*2*Math.PI/7)*k}; }
+function backdrop(t){
+  const d = drift(t);
+  const std = (s) => `<g transform="${cam(d.cx,d.cy,d.s)}">${s}</g>`;
+  if(t < T12[0]) return std(wall(t, true));
+  if(t < T12[1]){ // la cámara entra al dibujo del gatito (iris de papel)
+    const p = prog(t, T12[0], T12[1]);
+    const tgt = [DRAW_CAT[0], DRAW_CAT[1]];
+    const s = Math.exp(lerp(Math.log(d.s), Math.log(7.5), easeIn(p)));
+    const cx = lerp(d.cx, tgt[0], ease(p)), cy = lerp(d.cy, tgt[1], ease(p));
+    const sx = WIN.cx + s*(tgt[0]-cx), sy = WIN.cy + s*(tgt[1]-cy);
+    const R = 40*s*(1 + 7*Math.pow(p,2.2));
+    return `<g transform="${cam(cx,cy,s)}">${wall(t, true)}</g><clipPath id="iris"><path d="${blob(sx, sy, R, 4321 + TB%3, .05, 12)}"/></clipPath><g clip-path="url(#iris)">${std(scene2(t))}</g>` +
+      paper(`<path d="${blob(sx, sy, R, 4321 + TB%3, .05, 12)}" fill="none" stroke="#FBF3E1" stroke-width="${f(Math.min(40, 6+R*.04))}"/>`);
+  }
+  if(t < T23[0]) return std(scene2(t));
+  if(t < T23[1]){ // la cámara se mete por la "O" del bostezo de Mishi
+    const p = prog(t, T23[0], T23[1]);
+    const [mx, my, mrx, mry] = catMouthWorld(t);
+    const s = Math.exp(lerp(Math.log(d.s), Math.log(9), ease(p)));
+    const cx = lerp(d.cx, mx, ease(p)), cy = lerp(d.cy, my, ease(p));
+    const sx = WIN.cx + s*(mx-cx), sy = WIN.cy + s*(my-cy);
+    const k = 1 + 5*Math.pow(prog(p,.3,1), 2.0);
+    const dark = 1 - prog(p, .35, .8);
+    return `<g transform="${cam(cx,cy,s)}">${scene2(t)}</g><clipPath id="mouthc"><ellipse cx="${f(sx)}" cy="${f(sy)}" rx="${f(mrx*s*k*.92)}" ry="${f(mry*s*k*.92)}"/></clipPath><g clip-path="url(#mouthc)">${std(scene3(t))}<rect x="0" y="0" width="1080" height="1920" fill="${MOUTHC}" opacity="${f3(dark)}"/></g>`;
+  }
+  if(t < T34[0]) return std(scene3(t));
+  if(t < T34[1]){ // el panel se dobla como tarjeta y se desdobla en la escena 4
+    const p = prog(t, T34[0], T34[1]);
+    const back_ = rough(`<rect x="60" y="270" width="920" height="1060" fill="${KRAFT}"/>`) + `<path d="M520 270 L520 1330" stroke="#8C6A48" stroke-width="6" opacity=".6"/>`;
+    if(p < .5){ const sx = Math.cos(p*Math.PI); return back_ + std(`<g transform="translate(520 0) scale(${f3(Math.max(.01,sx))} 1) translate(-520 0)">${scene3(t)}<rect x="60" y="270" width="920" height="1060" fill="#3a2a1a" opacity="${f3((1-sx)*.35)}"/></g>`); }
+    const sx = -Math.cos(p*Math.PI); return back_ + std(`<g transform="translate(520 0) scale(${f3(Math.max(.01,sx))} 1) translate(-520 0)">${scene4(t)}<rect x="60" y="270" width="920" height="1060" fill="#3a2a1a" opacity="${f3((1-sx)*.35)}"/></g>`);
+  }
+  if(t < T45[0]) return std(scene4(t));
+  if(t < T45[1]){
+    const p = easeIn(prog(t, T45[0], T45[1]));
+    return std(scene5(t)) + `<g transform="translate(0 ${f(-1100*p)}) rotate(${f(-3*p)} 520 1300)">${std(scene4(t))}<rect x="60" y="1300" width="920" height="40" fill="#1a1a2e" opacity="${f3(.35*(1-p))}" filter="url(#soft)"/></g>`;
+  }
+  if(t < T56[0]) return std(scene5(t));
+  if(t < T56[1]){
+    const p = easeIn(prog(t, T56[0], T56[1])), R = lerp(80, 1400, p);
+    const bp = blob(SI[0], SI[1], R, 1234 + TB%3, .09, 14);
+    return std(scene5(t) + `<clipPath id="paint"><path d="${bp}"/></clipPath><g clip-path="url(#paint)">${scene6(t)}</g>` + crayon(`<path d="${bp}" fill="none" stroke="${TEAL}" stroke-width="22"/>`));
+  }
+  if(t < T67[0]) return std(scene6(t));
+  if(t < T67[1]){
+    const p = ease(prog(t, T67[0], T67[1])), ey = lerp(1310, 250, p);
+    return std(wall(t, false)) + `<clipPath id="scroll"><rect x="60" y="240" width="920" height="${f(Math.max(0, ey-240))}"/></clipPath><g clip-path="url(#scroll)">${std(scene6(t))}</g>` +
+      paper(`<rect x="56" y="${f(ey-30)}" width="928" height="60" rx="30" fill="url(#roll)" stroke="${EDGE}" stroke-width="4"/><path d="M70 ${f(ey-6)} L970 ${f(ey-8)}" stroke="#6E4C2C" stroke-width="3" opacity=".5"/>`);
+  }
+  return std(wall(t, false));
+}
+
+/* ---------- poses de Lía ---------- */
+let ARM1, ARM2, LX, LS, GLOW;
+function buildKeys(){
+  const q = S5.quiz_pause;
+  ARM1 = [[0,235],[0.45,235],[0.8,221],[2.9,221],[3.3,247],[WT(1,'bostezo',1)-0.2,247],[WT(1,'bostezo',1)+0.1,214],[WT(1,'seguro'),214],[WT(1,'seguro')+0.3,244],[T12[0],244],[T12[1],228],
+    [WT(2,'abrir'),222],[WT(2,'boca'),212],[WT(2,'aire',0,true),205],[WT(2,'como'),214],[WT(2,'final'),226],[WT(2,'quien'),206],[S2.end,232],
+    [WT(3,'alguien'),238],[WT(3,'cerebro'),222],[WT(3,'permiso'),214],[WT(3,'raro'),250],[S3.end,236],
+    [WT(4,'coral'),214],[WT(4,'teo'),204],[WT(4,'cientificos'),232],[WT(4,'conectamos'),218],[WT(4,'familia'),196],[WT(4,'amigos'),204],[WT(4,'desconocidos'),246],[S4.end,236],
+    [WT(5,'perrito'),208],[WT(5,'si')-0.2,236],[WT(5,'no')-0.1,222],[WT(5,'dilo'),250],[q[1],246],
+    [WT(6,'si')-0.1,258],[WT(6,'perros'),206],[WT(6,'dueno'),212],[WT(6,'favorita'),220],[WT(6,'chimpances'),242],[S6.end-0.2,236],
+    [S7.start+0.9,240],[WT(7,'copia')-0.1,214],[WT(7,'bostezos')-0.1,244],[WT(7,'hilito'),226],[WT(7,'bostezaste'),232],[WT(7,'sabes'),250],[WT(7,'sigueme'),236],[TL.duration,235]];
+  const mEnd = WT(7,'mas',0,true);
+  ARM2 = [[0,70],[WT(5,'dilo')-0.2,70],[WT(5,'dilo')+0.1,318],[q[1]-0.2,318],[q[1]+0.2,70],
+    [WT(6,'si')-0.2,70],[WT(6,'si')+0.1,322],[WT(6,'perros')+0.2,322],[WT(6,'perros')+0.6,70],
+    [WT(7,'sigueme')-0.25,70],[WT(7,'sigueme')+0.1,320],[mEnd+0.05,320],[mEnd+0.45,70],[TL.duration,70]];
+  LX = [[0,735],[T12[0],735],[T12[1],800],[T67[0]+0.2,800],[T67[1],735],[TL.duration,735]];
+  LS = [[0,1],[T12[0],1],[T12[1],.56],[T67[0]+0.2,.56],[T67[1],1],[TL.duration,1]];
+  GLOW = [[0,0],[TL.duration,0]];
+}
+function ideaAmt(t){
+  const a = t < 3.3 ? .45 + .55*easeOut(prog(t,0,.5)) : .45+.55*(1-prog(t,3.3,3.8));
+  const start = t<3.8 ? a : 0;
+  const ts = WT(7,'sabes'); const mid = t > ts-0.2 && t < ts+1.3 ? Math.sin(prog(t, ts-0.2, ts+1.3)*Math.PI) : 0;
+  const end = t > TL.duration-1.4 ? .45 * prog(t, TL.duration-1.4, TL.duration-0.9) : 0;
+  return Math.max(start, mid, end, 0);
+}
+
+/* ---------- subtítulos karaoke ---------- */
+function subtitles(t){
+  const el = document.getElementById('subs'); const caps = TL.captions;
+  let ci = -1;
+  for(let i=0;i<caps.length;i++){ const c=caps[i]; const nextS = i+1<caps.length ? caps[i+1].s : 1e9; if(t >= c.s-0.08 && t < Math.min(nextS-0.08, c.e+0.7)){ ci=i; break; } }
+  if(ci<0){ el.innerHTML=''; return; }
+  const c = caps[ci]; let h='';
+  for(let i=c.i0;i<=c.i1;i++){ const w=WORDS[i]; const on = t>=w.s-0.03 && t<(i<c.i1?WORDS[i+1].s-0.03:w.e+0.15);
+    const done = t>=w.e; let st='';
+    if(on){ const k=clamp((t-w.s)/0.22); const b = Math.sin(k*Math.PI); st = ` style="transform:translateY(${f(-9*b)}px) scale(${f3(1+.08*b)})"`; }
+    h += `<span class="w ${on?'on':(done?'':'up')}"${st}>${w.w}</span>`; }
+  el.innerHTML = `<div class="in">${h}</div>`;
+}
+
+/* ---------- reloj determinista ---------- */
+window.renderAt = function(t){
+  t = clamp(t, 0, TL.duration);
+  TM = Math.floor(t*12)/12; TB = Math.floor(t*8); BV = TB % 3;
+  const tm = TM;
+  const fr = Math.min(MOUTH.v.length-1, Math.floor(t*24));
+  const m = MOUTH.v[fr] || 0;
+  const blink = BLINKS.some(b => t>=b && t<b+0.125);
+  const speaking = m > 0.05 ? 1 : 0;
+  let svg = theaterBack();
+  svg += `<g clip-path="url(#win)">${backdrop(tm)}</g>`;
+  svg += theaterFront();
+  const lx = kf(tm, LX), ls = kf(tm, LS);
+  let a2 = kf(tm, ARM2);
+  const ws = WT(7,'sigueme'), we = WT(7,'mas',0,true);
+  if(tm > ws && tm < we+0.05) a2 += 14*Math.sin((tm-ws)*9);
+  const headRot = speaking ? 3*Math.sin(tm*9) : 1.2*Math.sin(tm*1.6);
+  const ly = 1352;
+  svg += ideaLines(lx, ly-446*ls, ls, ideaAmt(tm));
+  svg += lia(lx + jit(900,1), ly, ls, {arm1: kf(tm, ARM1) + 2*Math.sin(tm*3), arm2: a2, mouth: m, blink, headRot, glow: kf(tm, GLOW)});
+  svg += curtains();
+  svg += `<rect x="40" y="1466" width="920" height="228" rx="34" fill="${NAVY}" stroke="${VIOLET}" stroke-width="6"/>`;
+  document.getElementById('dyn').innerHTML = svg;
+  const gx = jit(990, 3), gy = jit(991, 3);
+  document.getElementById('grain').style.transform = `translate(${f(gx)}px,${f(gy)}px)`;
+  document.getElementById('gouache').style.transform = `translate(${f(-gx*.5)}px,${f(-gy*.5)}px)`;
+  subtitles(t);
+  return true;
+};
+
+/* ---------- texturas estáticas con semilla ---------- */
+function paintTextures(){
+  const r = mulberry32(2024);
+  const g = document.getElementById('grain').getContext('2d');
+  const img = g.createImageData(1080,1920);
+  for(let i=0;i<img.data.length;i+=4){ const v = 150 + r()*105; img.data[i]=v; img.data[i+1]=v*.97; img.data[i+2]=v*.92; img.data[i+3]=255; }
+  g.putImageData(img,0,0);
+  for(let i=0;i<2600;i++){ g.strokeStyle = `rgba(90,70,40,${.08+r()*.12})`; g.lineWidth = .6+r()*.8; g.beginPath(); const x=r()*1080, y=r()*1920, a=r()*Math.PI*2, l=4+r()*14; g.moveTo(x,y); g.quadraticCurveTo(x+Math.cos(a)*l*.5+r()*4, y+Math.sin(a)*l*.5+r()*4, x+Math.cos(a)*l, y+Math.sin(a)*l); g.stroke(); }
+  const q = document.getElementById('gouache').getContext('2d');
+  q.fillStyle = '#fff'; q.fillRect(0,0,1080,1920);
+  for(let i=0;i<900;i++){ const x=40+r()*960, y=220+r()*1230, w=30+r()*120, a=(r()-.5)*.6; q.save(); q.translate(x,y); q.rotate(a);
+    const gr = q.createLinearGradient(0,-8,0,8); const c = r()<.5 ? '120,95,60' : '255,255,255'; gr.addColorStop(0,`rgba(${c},0)`); gr.addColorStop(.5,`rgba(${c},${.15+r()*.25})`); gr.addColorStop(1,`rgba(${c},0)`);
+    q.fillStyle = gr; q.fillRect(-w/2,-6-r()*6,w,12+r()*10); q.restore(); }
+  for(let i=0;i<500;i++){ q.fillStyle=`rgba(80,60,30,${.1+r()*.2})`; q.beginPath(); q.arc(40+r()*960, 220+r()*1230, .5+r()*1.8, 0, Math.PI*2); q.fill(); }
+}
+paintTextures();
+buildKeys();
+window.READY = false;
+document.fonts.ready.then(()=>{ Promise.all([document.fonts.load('700 100px Gaegu'), document.fonts.load('600 60px Fredoka')]).then(()=>{ window.renderAt(0); window.READY = true; }); });
+</script>
+</body>
+</html>

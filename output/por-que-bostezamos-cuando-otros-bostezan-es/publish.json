@@ -1,0 +1,20 @@
+{
+  "idioma": "es",
+  "titulos": [
+    "¿Por qué se contagian los bostezos?",
+    "¿Tu perrito se contagia de tu bostezo?",
+    "Bostezos contagiosos: lo que hace tu cerebro"
+  ],
+  "descripcion_corta": "¿Bostezaste con solo oír la palabra «bostezo»? Lía te cuenta por qué los bostezos se contagian… ¡hasta a los perritos!",
+  "descripcion": "¿Por qué bostezamos cuando otros bostezan? En el Teatrito de Papel, Lía descubre que tu cerebro copia los bostezos casi sin que te des cuenta, que se contagian más entre familia y amigos, y que ¡hasta los perros y los chimpancés se contagian!\nUn minuto de ciencia con recortes de papel para niños de 6 a 9 años.\n\nPara madres, padres y docentes: los bebés y los niños muy pequeños casi no se contagian de los bostezos; el contagio aparece poco a poco durante los años de preescolar. Y no, no bostezamos \"para tomar oxígeno\": respirar más oxígeno no cambia cuánto bostezamos.\n\nFuentes:\n- Provine, R. R. (2005). Yawning. American Scientist 93(6): 532-539.\n- Norscia, I. y Palagi, E. (2011). Yawn Contagion and Empathy in Homo sapiens. PLoS ONE 6(12): e28472.\n- Joly-Mascheroni, R. M., Senju, A. y Shepherd, A. J. (2008). Dogs catch human yawns. Biology Letters 4(5): 446-448.\n- Romero, T., Konno, A. y Hasegawa, T. (2013). Familiarity Bias and Physiological Responses in Contagious Yawning by Dogs. PLoS ONE 8(8): e71365.\n- Campbell, M. W. y de Waal, F. B. M. (2011). Ingroup-Outgroup Bias in Contagious Yawning by Chimpanzees. PLoS ONE 6(4): e18283.\n- Helt, M. S. et al. (2010). Contagious yawning in autistic and typical development. Child Development 81(5): 1620-1631.",
+  "hashtags": ["#cienciaparaniños", "#teatritodepapel", "#bostezos", "#curiosidades", "#aprendejugando"],
+  "texto_portada": "¿Se contagian los bostezos?",
+  "frame_portada_s": 3.0,
+  "hecho_para_ninos": true,
+  "serie": "Teatrito de Papel",
+  "ideas_siguientes": [
+    "¿Por qué nos da hipo?",
+    "¿Por qué se contagia la risa?",
+    "¿Por qué soñamos cuando dormimos?"
+  ]
+}
