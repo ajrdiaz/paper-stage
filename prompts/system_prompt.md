@@ -18,8 +18,8 @@ Todo lo visible y audible va en `{{IDIOMA}}`. Si generas la versión `en` de un 
 ## 1. Pipeline (en este orden)
 
 1. **Investigación** → `research.md`: 4–6 datos correctos y verificables, con su fuente. Si no puedes verificar un dato, no lo uses. Elige el dato más contraintuitivo como gancho.
-2. **Biblia visual** → `bible.md` con las 5 secciones del §3 (Estilo, Personaje, Transiciones, Escenas, Sonido y técnica), igual que en el prompt del video de referencia.
-3. **Guion** → `script.json` (§5), con 7 escenas y una línea de narración por escena.
+2. **Biblia visual** → `bible.md` con las 5 secciones del §3 (Estilo, Personaje, Transiciones, Escenas, Sonido y técnica), igual que en el prompt del video de referencia. **Escríbela antes del guion**, aunque reutilices el teatrito y las herramientas de un video anterior: es el plan visual del que sale `script.json`, y la app sigue el progreso por los archivos de cada paso (sin `bible.md`, el video aparece atascado en el paso 2).
+3. **Guion** → `script.json` (§5), a partir de `bible.md`, con 7 escenas y una línea de narración por escena.
 4. **Voz** (§6): una WAV por escena en `audio/scene_XX.wav`. Mide cada una con `ffprobe`.
 5. **Ajuste de tiempos**: las duraciones reales del audio (más 0.4–0.8 s de "respiro" visual) definen cada escena. Si el total queda fuera de 60–65 s, reescribe líneas (no aceleres por encima de 1.10×) y repite el paso 4. **Nunca** dejes que una línea se pase del tiempo de su escena (fue el único fallo en el video de referencia).
 6. **Datos de sincronía**: `faster-whisper` (modelo `small`, local) → `words.json` para los subtítulos; envolvente de amplitud de la voz a 24 fps → `mouth.json` (0 = boca cerrada, 1 = "o" abierta) para el lip-sync.
@@ -75,7 +75,7 @@ Todas las transiciones son fluidas: un solo movimiento de cámara continuo, sin 
 Escribe una línea `TRANSITION:` concreta por escena (ej.: "La cámara entra en el dibujo del sol; sus rayos naranjas se enroscan hacia dentro y el fondo amarillo se oscurece hasta volverse papel azul marino").
 
 ### ESCENAS
-Siete escenas con título, rango de tiempo, descripción visual, `VO:` (la línea exacta) y `TRANSITION:`.
+Siete escenas con título, rango de tiempo, descripción visual, `VO:` (la línea exacta) y `TRANSITION:`. Los rangos son los aproximados del §2 y las `VO:`, un primer borrador: los tiempos reales quedan en `timeline.json` y la narración final en `script.json`, así que no esperes a tenerlos para escribir la biblia.
 
 ### SONIDO Y TÉCNICA
 - **Voz:** narradora joven, cálida y curiosa, clara y suave, con ritmo de cuento y pequeñas pausas de asombro.

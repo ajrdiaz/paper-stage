@@ -221,6 +221,8 @@ details.advanced .fields-3, details.advanced .fields-2 { margin-top: 12px; }
 .step.done .dot { background: var(--teal); border-color: var(--teal); color: #fff; }
 .step.current { color: var(--ink); background: var(--run-bg); }
 .step.current .dot { border-color: var(--mustard); background: var(--mustard); animation: pulse 1.2s ease-in-out infinite; }
+.step.late { color: var(--warn); }
+.step.late .dot { border-style: dashed; border-color: var(--warn); }
 
 /* ------------------------------------------------------------ registro */
 .log {

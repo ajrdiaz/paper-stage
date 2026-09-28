@@ -208,11 +208,19 @@ async function watchJobs() {
 /* ------------------------------------------------------------------ componentes */
 
 function stepsHtml(steps, running) {
-  const current = running ? steps.findIndex(s => !s.done) : -1;
-  return `<div class="steps">${steps.map((s, i) => `
-    <div class="step ${s.done ? "done" : i === current ? "current" : ""}">
+  // El agente no siempre sigue el orden: el paso actual es el que sigue al último hecho,
+  // y los anteriores sin hacer se marcan como pendientes en lugar de "actuales".
+  let last = -1;
+  steps.forEach((s, i) => { if (s.done) last = i; });
+  const current = running && last + 1 < steps.length ? last + 1 : -1;
+  return `<div class="steps">${steps.map((s, i) => {
+    const cls = s.done ? "done" : i === current ? "current" : i < last ? "late" : "";
+    const tip = cls === "late" ? ` title="Pendiente: el agente ya pasó a pasos posteriores"` : "";
+    return `
+    <div class="step ${cls}"${tip}>
       <span class="dot">${s.done ? "✓" : i + 1}</span><span>${esc(s.label)}</span>
-    </div>`).join("")}</div>`;
+    </div>`;
+  }).join("")}</div>`;
 }
 
 function jobRow(job) {
