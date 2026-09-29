@@ -76,7 +76,9 @@ h2 { font-size: 1.15rem; font-weight: 600; }
 h3 { font-size: 1rem; font-weight: 600; }
 .muted { color: var(--ink-3); }
 .small { font-size: .875rem; }
-.hidden { display: none !important; }
+.hidden, [hidden] { display: none !important; }  /* [hidden] también gana a .stack/.row */
+fieldset.plain { border: 0; margin: 0; padding: 0; min-width: 0; }
+fieldset:disabled .btn { cursor: not-allowed; }
 
 /* ------------------------------------------------------------ barra superior */
 .topbar {
@@ -196,6 +198,7 @@ details.advanced .fields-3, details.advanced .fields-2 { margin-top: 12px; }
 @media (prefers-color-scheme: dark) { .pill.interrupted { background: #362D58; color: #CBBDF2; } }
 .pill.lang { background: var(--paper-2); border: 1px solid var(--line); }
 .pill.tiktok { background: var(--navy); color: var(--cream); }
+.pill.tiktok.soon { background: var(--run-bg); color: var(--run); }
 @media (prefers-color-scheme: dark) { .pill.tiktok { background: var(--cream); color: var(--navy); } }
 #job-status .pill + .pill { margin-left: 6px; }
 .pill.lang::before, .pill.plain::before { display: none; }

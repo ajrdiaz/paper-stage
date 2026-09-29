@@ -122,6 +122,13 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         await publisher.stop()
         await manager.stop()
 
+    def _with_tiktok(items: list[dict]) -> list[dict]:
+        published = publisher.published()
+        for item in items:
+            item["tiktok"] = published.get(item["slug"])
+            item["en_tiktok"] = item["tiktok"] is not None
+        return items
+
     # ------------------------------------------------------------------ configuración
 
     async def config(request: Request):
@@ -253,12 +260,6 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
 
     # ------------------------------------------------------------------ trabajos
 
-    def _with_tiktok(jobs: list[dict]) -> list[dict]:
-        published = publisher.published()
-        for job in jobs:
-            job["en_tiktok"] = job["slug"] in published
-        return jobs
-
     async def list_jobs(request: Request):
         return JSONResponse(_with_tiktok(await asyncio.to_thread(manager.list)))
 
@@ -355,6 +356,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         except ValueError:
             return _error("Video no válido.", 400)
         if request.method == "GET":
+            await asyncio.to_thread(publisher.refresh, slug)
             publish = library.read_json(out_dir / "publish.json")
             text = default_text(publish if isinstance(publish, dict) else {})
             return JSONResponse({**publisher.state(slug), "default_text": text,
@@ -382,11 +384,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
     # ------------------------------------------------------------------ biblioteca
 
     async def list_videos(request: Request):
-        videos = await asyncio.to_thread(library.list_videos)
-        published = publisher.published()
-        for video in videos:
-            video["en_tiktok"] = video["slug"] in published
-        return JSONResponse(videos)
+        return JSONResponse(_with_tiktok(await asyncio.to_thread(library.list_videos)))
 
     async def get_video(request: Request):
         slug = request.path_params["slug"]

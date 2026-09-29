@@ -95,6 +95,10 @@ def drive_file_id(path: Path) -> str | None:
     return None
 
 
+def folder_url(folder_id: str) -> str:
+    return f"https://drive.google.com/drive/folders/{folder_id}"
+
+
 def public_url(file_id: str) -> str:
     # Descarga directa, sin la página de vista previa ni redirecciones (Buffer no las sigue);
     # confirm=t evita el aviso de «no se pudo analizar en busca de virus» de los archivos grandes.
@@ -134,10 +138,15 @@ query Channels($org: OrganizationId!) {
   channels(input: { organizationId: $org }) { id name displayName service }
 }
 """
+POST_STATUS = """
+query Post($id: PostId!) { post(input: { id: $id }) { id status dueAt sentAt } }
+"""
+# Estados de Buffer que ya no cambian: no hace falta volver a consultarlos.
+FINAL_STATUS = {"sent", "error", "deleted"}
 CREATE_POST = """
 mutation CreatePost($input: CreatePostInput!) {
   createPost(input: $input) {
-    ... on PostActionSuccess { post { id dueAt } }
+    ... on PostActionSuccess { post { id dueAt status } }
     ... on MutationError { message }
   }
 }
@@ -219,14 +228,19 @@ class PublishRequest:
 class Publisher:
     """Configuración, tareas de publicación en curso (una por video) e historial."""
 
-    def __init__(self, db: sqlite3.Connection, http: Http = http_request,
+    def __init__(self, db: sqlite3.Connection, http: Http = http_request,  # noqa: PLR0913
                  drive_id: Callable[[Path], str | None] = drive_file_id,
                  sleep: Callable[[float], Awaitable] = asyncio.sleep,
                  poll: float = 5, sync_timeout: float = 20 * 60, demo: bool = False,
                  default_folder: Path | None = None, login_grace: float = 120):
         self.db = db
         self.db.executescript(SCHEMA)
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(publications)")}
+        for column in ("status", "sent_at"):  # añadidas después: bases de datos anteriores
+            if column not in columns:
+                self.db.execute(f"ALTER TABLE publications ADD COLUMN {column} TEXT")
         self.db.commit()
+        self.last_refresh: dict[str, float] = {}
         self.http, self.drive_id, self.sleep = http, drive_id, sleep
         self.poll, self.sync_timeout, self.demo = poll, sync_timeout, demo
         self.default_folder = default_folder
@@ -270,7 +284,10 @@ class Publisher:
     def config(self) -> dict:
         folder = self.folder
         key = self.key
+        # Enlace a la carpeta exacta que usa la app, para compartir esa y no otra con el mismo nombre.
+        folder_id = self.drive_id(folder) if folder and folder.is_dir() else None
         return {
+            "drive_folder_url": folder_url(folder_id) if folder_id else "",
             "buffer_key": bool(key), "buffer_key_hint": f"…{key[-4:]}" if len(key) > 8 else "",
             "buffer_key_env": bool(os.environ.get("PAPER_STAGE_BUFFER_KEY")),
             "channel_id": self._get("channel_id"), "channel_name": self._get("channel_name"),
@@ -318,9 +335,40 @@ class Publisher:
     def state(self, slug: str) -> dict:
         return {"status": self.status.get(slug), "history": self.history(slug)}
 
-    def published(self) -> set[str]:
-        """Slugs con alguna publicación registrada (por Buffer o marcada a mano)."""
-        return {slug for (slug,) in self.db.execute("SELECT DISTINCT slug FROM publications")}
+    def published(self) -> dict[str, str]:
+        """Slug → "publicado" (salió en TikTok o se subió a mano) o "programado" (en Buffer,
+        aún sin salir). Un envío que falló en Buffer no cuenta."""
+        states: dict[str, str] = {}
+        for slug, mode, status in self.db.execute("SELECT slug, mode, status FROM publications"):
+            if mode == MANUAL or status == "sent":
+                states[slug] = "publicado"
+            elif status not in ("error", "deleted"):
+                states.setdefault(slug, "programado")
+        return states
+
+    def refresh(self, slug: str, min_interval: float = 60) -> None:
+        """Pregunta a Buffer por los envíos de un video que aún no terminaron (como mucho
+        una vez por minuto, para no gastar el cupo de la API)."""
+        if not self.key or time.time() - self.last_refresh.get(slug, 0) < min_interval:
+            return
+        rows = self.db.execute("SELECT id, post_id FROM publications WHERE slug = ? AND mode != ? "
+                               "AND post_id IS NOT NULL AND (status IS NULL OR status NOT IN ('sent', 'error', 'deleted'))",
+                               [slug, MANUAL]).fetchall()
+        if rows:  # la pausa solo cuenta si de verdad se consultó a Buffer
+            self.last_refresh[slug] = time.time()
+        for pub_id, post_id in rows:
+            try:
+                post = buffer_query(self.key, POST_STATUS, {"id": post_id}, self.http).get("post")
+            except PublishError as exc:
+                if "NOT_FOUND" not in str(exc):
+                    return  # sin red o Buffer caído: se reintenta la próxima vez
+                post = None
+            if not post:
+                self.db.execute("UPDATE publications SET status = 'deleted' WHERE id = ?", [pub_id])
+            else:
+                self.db.execute("UPDATE publications SET status = ?, due_at = ?, sent_at = ? WHERE id = ?",
+                                [post.get("status"), post.get("dueAt"), post.get("sentAt"), pub_id])
+        self.db.commit()
 
     def mark_manual(self, slug: str) -> dict:
         """Registra que el video ya se subió a TikTok a mano, para no volver a enviarlo."""
@@ -394,12 +442,15 @@ class Publisher:
                 return
             post = await self._post(slug, req, cfg, url)
             self.db.execute(
-                "INSERT INTO publications (slug, channel_id, channel_name, post_id, mode, due_at, url, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO publications (slug, channel_id, channel_name, post_id, mode, due_at, url, created_at, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [slug, cfg["channel_id"], cfg["channel_name"], post.get("id"), req.mode,
-                 post.get("dueAt") or req.due_at, url, time.time()])
+                 post.get("dueAt") or req.due_at, url, time.time(), post.get("status")])
             self.db.commit()
-            when = {"now": "Buffer lo está publicando ahora.", "queue": "Quedó en tu cola de Buffer.",
+            due = post.get("dueAt") or req.due_at
+            due_text = f" para {due[:16].replace('T', ' ')} UTC" if due else ""
+            when = {"now": "Buffer lo está publicando ahora.",
+                    "queue": f"Quedó en el siguiente hueco del horario de tu canal en Buffer{due_text}.",
                     "schedule": "Quedó programado en Buffer."}[req.mode]
             self.status[slug].update(state="done", step=f"Enviado. {when} Deja el video en Drive hasta que se publique.")
         except PublishError as exc:
@@ -438,7 +489,8 @@ class Publisher:
                 if result == "login":
                     login_since = login_since or time.monotonic()
                     if time.monotonic() - login_since >= self.login_grace:
-                        raise PublishError(f"Drive ya tiene el video, pero {detail}")
+                        raise PublishError(f"Drive ya tiene el video, pero {detail} Usa el enlace «Abrir la "
+                                           "carpeta en Drive» para compartir justo la carpeta que usa la app.")
                 else:
                     login_since = None
             # Que se vea el motivo de la espera, no solo que se espera.

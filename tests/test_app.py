@@ -329,7 +329,7 @@ class AppTests(unittest.TestCase):
             self.assertTrue(cfg["ready"])
             info = client.get(f"/api/videos/{job['slug']}/publish").json()
             self.assertIn("#", info["default_text"])
-            res = client.post(f"/api/videos/{job['slug']}/publish", json={"text": info["default_text"], "mode": "queue"})
+            res = client.post(f"/api/videos/{job['slug']}/publish", json={"text": info["default_text"], "mode": "now"})
             self.assertEqual(res.status_code, 200, res.text)
             deadline = time.time() + 20
             while time.time() < deadline:
@@ -339,6 +339,8 @@ class AppTests(unittest.TestCase):
                 time.sleep(0.1)
             self.assertEqual(state["status"]["state"], "done", state)
             self.assertEqual(len(state["history"]), 1)
+            self.assertEqual(state["history"][0]["status"], "sent")  # la ficha pregunta a Buffer al abrirse
+            self.assertEqual(next(v for v in client.get("/api/videos").json() if v["slug"] == job["slug"])["tiktok"], "publicado")
             again = client.post(f"/api/videos/{job['slug']}/publish", json={"text": "Otra"})
             self.assertEqual(again.status_code, 409)
             other = client.post("/api/jobs", json={"tema": "Las gotas de lluvia"}).json()
@@ -367,8 +369,9 @@ class AppTests(unittest.TestCase):
 class FakeNet:
     """Buffer y la descarga de Drive simulados; guarda lo que se envió a Buffer."""
 
-    def __init__(self, public=True, key_ok=True, login=False):
+    def __init__(self, public=True, key_ok=True, login=False, post_status="scheduled"):
         self.public, self.key_ok, self.login, self.posts = public, key_ok, login, []
+        self.post_status, self.status_queries = post_status, 0
 
     def __call__(self, method, url, headers, body):
         if url != publishing.BUFFER_API:
@@ -384,7 +387,15 @@ class FakeNet:
         payload = json.loads(body)
         if "createPost" in payload["query"]:
             self.posts.append(payload["variables"]["input"])
-            data = {"createPost": {"post": {"id": f"p{len(self.posts)}", "dueAt": "2026-10-01T15:00:00Z"}}}
+            data = {"createPost": {"post": {"id": f"p{len(self.posts)}", "dueAt": "2026-10-01T15:00:00Z",
+                                            "status": "scheduled"}}}
+        elif "post(input" in payload["query"]:
+            self.status_queries += 1
+            if self.post_status is None:  # borrado en Buffer
+                return 200, {}, json.dumps({"data": None, "errors": [{"message": "Post not found",
+                                                                     "extensions": {"code": "NOT_FOUND"}}]}).encode()
+            data = {"post": {"id": payload["variables"]["id"], "status": self.post_status,
+                             "dueAt": "2026-10-01T15:00:00Z", "sentAt": "2026-09-29T01:00:00Z"}}
         elif "organizations" in payload["query"]:
             data = {"account": {"organizations": [{"id": "o1", "name": "Mía"}]}}
         else:
@@ -474,6 +485,27 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([h["mode"] for h in pub.unmark(self.slug, manual["id"])["history"]], ["queue"])
         with self.assertRaises(publishing.PublishError):
             pub.mark_manual("no-existe-es")
+
+    async def test_refresh_status(self):
+        net = FakeNet()
+        pub = self.publisher(net)
+        pub.start(self.slug, publishing.PublishRequest(text="Hola"))
+        await self.finish(pub, self.slug)
+        self.assertEqual(pub.published()[self.slug], "programado")  # aún no salió
+        net.post_status = "sent"  # lo publicaron desde el panel de Buffer
+        pub.refresh(self.slug)
+        row = pub.history(self.slug)[0]
+        self.assertEqual((row["status"], row["sent_at"]), ("sent", "2026-09-29T01:00:00Z"))
+        self.assertEqual(pub.published()[self.slug], "publicado")
+        pub.refresh(self.slug, min_interval=0)  # ya es definitivo: no se vuelve a preguntar
+        self.assertEqual(net.status_queries, 1)
+        # Borrado en Buffer: deja de contar como publicado o programado.
+        pub.start(self.slug, publishing.PublishRequest(text="Otra", again=True))
+        await self.finish(pub, self.slug)
+        net.post_status = None
+        pub.refresh(self.slug, min_interval=0)
+        self.assertEqual({h["status"] for h in pub.history(self.slug)}, {"sent", "deleted"})
+        self.assertEqual(pub.published()[self.slug], "publicado")
 
     async def test_errors_are_readable(self):
         # Carpeta sin compartir: falla rápido (sin agotar la espera) y dice cómo arreglarlo.

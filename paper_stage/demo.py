@@ -392,7 +392,10 @@ def demo_publisher_parts(data_dir: Path) -> dict:
             return 206, {"Content-Type": "video/mp4"}, b"\x00\x00\x00\x18ftypmp42"
         query = json.loads(body or b"{}").get("query", "")
         if "createPost" in query:
-            data = {"createPost": {"post": {"id": "demo-post", "dueAt": None}}}
+            data = {"createPost": {"post": {"id": "demo-post", "dueAt": None, "status": "sending"}}}
+        elif "post(input" in query:
+            data = {"post": {"id": "demo-post", "status": "sent", "dueAt": None,
+                             "sentAt": "2026-01-01T12:00:00Z"}}
         elif "organizations" in query:
             data = {"account": {"organizations": [{"id": "demo-org", "name": "Demo"}]}}
         else:

@@ -56,7 +56,8 @@ function pill(status) {
   return `<span class="pill ${esc(status)}">${esc(STATUS[status] || status)}</span>`;
 }
 // Junto al estado de producción: si el video ya está en TikTok (por Buffer o subido a mano).
-const tiktokPill = on => (on ? `<span class="pill tiktok">En TikTok</span>` : "");
+const tiktokPill = state => (state === "publicado" || state === true ? `<span class="pill tiktok">En TikTok</span>`
+  : state === "programado" ? `<span class="pill tiktok soon">Programado en TikTok</span>` : "");
 
 function toast(html, kind = "") {
   const el = document.createElement("div");
@@ -264,7 +265,7 @@ function jobRow(job) {
   return `
     <a class="job" href="#/trabajo/${esc(job.id)}">
       <span class="title">${esc(req.tema)}</span>
-      <span class="pills">${tiktokPill(job.en_tiktok)}${pill(job.status)}</span>
+      <span class="pills">${tiktokPill(job.tiktok)}${pill(job.status)}</span>
       ${ACTIVE.has(job.status) || job.steps_done ? `<div class="bar" aria-hidden="true"><i style="width:${pct}%"></i></div>` : ""}
       <span class="meta">
         <span class="pill lang">${esc((req.idioma || "").toUpperCase())}</span>
@@ -552,7 +553,7 @@ async function renderJob(jobId) {
 
   function paint(j) {
     job = j;
-    $("#job-status").innerHTML = pill(j.status) + tiktokPill(j.en_tiktok) + (j.queue_position ? ` <span class="small muted">puesto ${j.queue_position} en la cola</span>` : "");
+    $("#job-status").innerHTML = pill(j.status) + tiktokPill(j.tiktok) + (j.queue_position ? ` <span class="small muted">puesto ${j.queue_position} en la cola</span>` : "");
     const end = j.finished_at || (ACTIVE.has(j.status) ? Date.now() / 1000 : null);
     const elapsed = j.started_at && end ? fmtTime(end - j.started_at) : "—";
     $("#job-meta").textContent = `Tiempo: ${elapsed} · Turnos: ${j.turns || 0} · Costo: ${fmtCost(j.cost_usd)}`;
@@ -651,7 +652,7 @@ async function renderLibrary(params) {
           <div class="row small">
             ${v.idioma ? `<span class="pill lang">${esc(v.idioma.toUpperCase())}</span>` : ""}
             <span class="muted">${esc(charName(v.personaje))}</span>
-            ${tiktokPill(v.en_tiktok)}
+            ${tiktokPill(v.tiktok)}
             ${v.has_video ? `<span class="pill done">Video listo</span>` : `<span class="pill">${v.steps_done}/${v.steps_total} pasos</span>`}
             ${v.qa ? `<span class="pill plain ${v.qa.failed ? "failed" : "done"}">QA ${v.qa.passed}/${v.qa.total}</span>` : ""}
             ${v.verify && !v.verify.ok ? `<span class="pill plain failed" title="La revisión automática encontró problemas">Revisar</span>` : ""}
@@ -1118,8 +1119,21 @@ async function renderSystem() {
 
 /* ------------------------------------------------------------------ publicar en TikTok (Buffer + Drive) */
 
-const PUB_MODES = { queue: "En la cola de Buffer", now: "Ahora", schedule: "Programar" };
-const PUB_DONE = { ...PUB_MODES, now: "Publicado ahora", schedule: "Programado", manual: "Subido a mano" };
+// La primera es la opción por defecto. (La API también admite la cola de Buffer, pero pone el
+// video en la siguiente franja del horario del canal, que puede ser dentro de días.)
+const PUB_MODES = { now: "Publicar ahora", schedule: "Programar" };
+const PUB_HINT = {
+  now: "Buffer lo publica en TikTok en cuanto lo recibe.",
+  schedule: "Sale en la fecha y hora que elijas.",
+};
+// Estado real de un envío, según Buffer (se consulta al abrir la ficha).
+function pubState(h) {
+  const at = iso => iso ? new Date(iso).toLocaleString("es", { dateStyle: "medium", timeStyle: "short" }) : "";
+  if (h.mode === "manual") return "Subido a mano";
+  return ({ sent: `Publicado ${at(h.sent_at)}`, sending: "Enviándose a TikTok ahora", error: "Falló en Buffer (revísalo allí)",
+            deleted: "Borrado en Buffer", draft: "Borrador en Buffer", needs_approval: "Pendiente de aprobación en Buffer",
+            scheduled: `Programado para ${at(h.due_at)}` })[h.status] || `Programado para ${at(h.due_at)}`;
+}
 const fmtUnits = text => text.length; // Buffer cuenta unidades UTF-16, igual que .length en JS
 
 async function mountPublishingSetup(box) {
@@ -1135,6 +1149,7 @@ async function mountPublishingSetup(box) {
         <li><strong>Carpeta de Google Drive</strong>
           <div class="row"><input type="text" id="pub-folder" value="${esc(cfg.drive_folder)}" aria-label="Carpeta de Drive">
             <button class="btn small" id="pub-folder-save">${cfg.drive_folder_exists ? "Guardar" : "Crear carpeta"}</button></div>
+          ${cfg.drive_folder_url ? `<a class="btn small" href="${esc(cfg.drive_folder_url)}" target="_blank" rel="noopener">Abrir la carpeta en Drive</a>` : ""}
           <span class="hint">${cfg.drive_folder_exists ? "✓ La carpeta existe." : cfg.drive_roots.length ? "Aún no existe: pulsa «Crear carpeta»." : "No encontré Google Drive para escritorio: instálalo e inicia sesión."}
             Luego, en <a href="https://drive.google.com" target="_blank" rel="noopener">drive.google.com</a>: clic derecho en la carpeta → Compartir →
             Acceso general: <strong>«Cualquier persona con el enlace»</strong> (Lector). Todo lo que pongas en esa carpeta será visible con su enlace.</span></li>
@@ -1161,7 +1176,15 @@ async function mountPublishingSetup(box) {
     try { cfg = await api("/api/publishing", { method: "PUT", body }); draw(); toast("Guardado.", "ok"); }
     catch (err) { $("#pub-error", box).textContent = err.message; }
   };
+  // Mientras corre la prueba, su botón queda bloqueado (también si se vuelve a esta página).
+  const followTest = () => followStatus("/api/publishing/test", st => {
+    const button = $("#pub-test", box), running = st.status?.state === "running";
+    $("#pub-test-status", box).textContent = st.status?.step || $("#pub-test-status", box).textContent;
+    button.disabled = running || !(cfg.buffer_key && cfg.drive_folder_exists);
+    button.textContent = running ? "Probando…" : "Probar la configuración";
+  }, box);
   draw();
+  api("/api/publishing/test").then(st => { if (st.status?.state === "running") followTest(); }).catch(() => {});
   box.addEventListener("click", async ev => {
     const id = ev.target.id;
     if (id === "pub-folder-save") save({ drive_folder: $("#pub-folder", box).value, create_folder: true });
@@ -1178,10 +1201,12 @@ async function mountPublishingSetup(box) {
       finally { ev.target.disabled = false; }
     }
     if (id === "pub-test") {
+      ev.target.disabled = true;
+      ev.target.textContent = "Probando…";
       try {
         await api("/api/publishing/test", { method: "POST" });
-        followStatus("/api/publishing/test", st => { $("#pub-test-status", box).textContent = st.status?.step || ""; }, box);
-      } catch (err) { $("#pub-error", box).textContent = err.message; }
+        followTest();
+      } catch (err) { $("#pub-error", box).textContent = err.message; draw(); }
     }
   });
   box.addEventListener("change", ev => {
@@ -1208,8 +1233,8 @@ async function mountPublish(box, slug) {
   const cfg = data.config;
   const manual = data.history.some(h => h.mode === "manual");
   const history = () => data.history.length ? `<ul class="pub-history">${data.history.map(h => `
-    <li>✓ ${esc(h.channel_name || "TikTok")} · ${esc(PUB_DONE[h.mode] || h.mode)}${h.due_at ? ` · ${esc(new Date(h.due_at).toLocaleString("es"))}` : ""}
-      <span class="small muted">${h.mode === "manual" ? "marcado" : "enviado"} ${fmtDate(h.created_at)}</span>
+    <li>${h.status === "error" ? "✗" : "✓"} ${esc(h.channel_name || "TikTok")} · ${esc(pubState(h))}
+      <span class="small muted">${h.mode === "manual" ? "marcado" : "enviado a Buffer"} ${fmtDate(h.created_at)}</span>
       ${h.mode === "manual" ? `<button type="button" class="btn small" data-unmark="${h.id}">Quitar marca</button>` : ""}</li>`).join("")}</ul>` : "";
   const markButton = manual ? "" : `<button type="button" class="btn small" id="pub-mark">Ya lo subí a TikTok: marcar como publicado</button>`;
   box.onclick = async ev => {
@@ -1225,8 +1250,9 @@ async function mountPublish(box, slug) {
     const st = data.status;
     if (!st) return "";
     const cls = st.state === "failed" ? "failed" : st.state === "done" ? "done" : "running";
+    const share = st.state === "failed" && cfg.drive_folder_url && /Cualquier persona con el enlace/.test(st.step);
     return `<div class="pub-status ${cls}"><span class="pill ${cls}">${st.state === "running" ? "Publicando" : st.state === "done" ? "Listo" : "Falló"}</span>
-      <span>${esc(st.step)}</span></div>`;
+      <span>${esc(st.step)}${share ? ` <a class="btn small" href="${esc(cfg.drive_folder_url)}" target="_blank" rel="noopener">Abrir la carpeta en Drive</a>` : ""}</span></div>`;
   };
   if (!cfg.ready) {
     box.innerHTML = `<div class="row"><h3>Publicar en TikTok</h3>${data.history.length ? `<span class="pill done">En TikTok</span>` : ""}</div>${history()}
@@ -1237,23 +1263,27 @@ async function mountPublish(box, slug) {
   const running = data.status?.state === "running";
   const sent = data.history.some(h => h.channel_id === cfg.channel_id) || manual;
   box.innerHTML = `
-    <div class="row"><h3>Publicar en TikTok</h3>${data.history.length ? `<span class="pill done">En TikTok</span>` : ""}
+    <div class="row"><h3>Publicar en TikTok</h3>${tiktokPill(data.history.some(h => h.mode === "manual" || h.status === "sent") ? "publicado"
+      : data.history.some(h => !["error", "deleted"].includes(h.status)) ? "programado" : null)}
       <span class="spacer"></span><span class="small muted">${esc(cfg.channel_name)}</span></div>
     ${history()}${status()}
     ${manual && !running ? `<p class="small muted">Ya está en TikTok. Si de verdad quieres enviarlo otra vez por Buffer,
       <button type="button" class="btn small" id="pub-show">muestra el formulario</button>.</p>` : ""}
     <div class="row">${running ? "" : markButton}</div>
-    <form id="pub-form" class="stack" ${running || manual ? "hidden" : ""}>
+    <form id="pub-form" ${manual && !running ? "hidden" : ""}>
+     <fieldset class="stack plain" ${running ? "disabled" : ""}>
       <div class="field"><label for="pub-text">Texto</label>
         <textarea id="pub-text" rows="4">${esc(data.default_text)}</textarea>
         <span class="hint" id="pub-count"></span></div>
       <div class="segmented" role="radiogroup" aria-label="Cuándo">
         ${Object.entries(PUB_MODES).map(([k, label], i) => `<label><input type="radio" name="pub-mode" value="${k}" ${i === 0 ? "checked" : ""}><span>${label}</span></label>`).join("")}</div>
+      <span class="hint" id="pub-hint">${PUB_HINT.now}</span>
       <input type="datetime-local" id="pub-when" class="hidden" aria-label="Fecha y hora">
       <label class="row small"><input type="checkbox" id="pub-ai2" ${cfg.ai_label ? "checked" : ""}> Declarar contenido generado con IA</label>
       <p id="pub-err" class="small" style="color:var(--warn)" role="alert"></p>
       <div class="row"><span class="small muted">La portada será el fotograma de <code>frame_portada_s</code>. El video debe quedarse en Drive hasta que se publique.</span>
-        <span class="spacer"></span><button class="btn primary" type="submit">${sent ? "Publicar otra vez" : "Publicar en TikTok"}</button></div>
+        <span class="spacer"></span><button class="btn primary" type="submit" id="pub-submit">${running ? "Publicando…" : sent ? "Publicar otra vez" : "Publicar en TikTok"}</button></div>
+     </fieldset>
     </form>`;
   $("#pub-show", box)?.addEventListener("click", () => { $("#pub-form", box).hidden = false; $("#pub-show", box).closest("p").remove(); });
   const count = () => {
@@ -1263,19 +1293,29 @@ async function mountPublish(box, slug) {
   };
   count();
   $("#pub-text", box).addEventListener("input", count);
-  $$("input[name=pub-mode]", box).forEach(r => r.addEventListener("change", () =>
-    $("#pub-when", box).classList.toggle("hidden", r.value !== "schedule" || !r.checked)));
+  $$("input[name=pub-mode]", box).forEach(r => r.addEventListener("change", () => {
+    $("#pub-when", box).classList.toggle("hidden", r.value !== "schedule" || !r.checked);
+    $("#pub-hint", box).textContent = PUB_HINT[r.value];
+  }));
   $("#pub-form", box).addEventListener("submit", async ev => {
     ev.preventDefault();
     const mode = $("input[name=pub-mode]:checked", box).value, when = $("#pub-when", box).value;
     if (mode === "now" && !confirmAction("¿Publicar este video en TikTok ahora mismo?")) return;
     if (sent && !confirmAction(manual ? "Este video ya está en TikTok (subido a mano). ¿Enviarlo otra vez por Buffer?"
       : "Este video ya se envió a esa cuenta. ¿Enviarlo otra vez?")) return;
+    // Bloquea el formulario desde el clic: un segundo clic no debe lanzar otro envío.
+    const fields = $("fieldset", ev.target), button = $("#pub-submit", box), label = button.textContent;
+    fields.disabled = true;
+    button.textContent = "Publicando…";
     try {
       await api(path, { method: "POST", body: { text: $("#pub-text", box).value, mode, ai_label: $("#pub-ai2", box).checked, again: sent,
         due_at: mode === "schedule" && when ? new Date(when).toISOString() : null } });
       mountPublish(box, slug);
-    } catch (err) { $("#pub-err", box).textContent = err.message; }
+    } catch (err) {
+      fields.disabled = false;
+      button.textContent = label;
+      $("#pub-err", box).textContent = err.message;
+    }
   });
   if (running) followStatus(path, st => {
     if (st.status?.state !== "running") { mountPublish(box, slug); return; }
