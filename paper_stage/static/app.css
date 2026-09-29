@@ -195,6 +195,9 @@ details.advanced .fields-3, details.advanced .fields-2 { margin-top: 12px; }
 .pill.interrupted { background: #E6E0F3; color: var(--violet); }
 @media (prefers-color-scheme: dark) { .pill.interrupted { background: #362D58; color: #CBBDF2; } }
 .pill.lang { background: var(--paper-2); border: 1px solid var(--line); }
+.pill.tiktok { background: var(--navy); color: var(--cream); }
+@media (prefers-color-scheme: dark) { .pill.tiktok { background: var(--cream); color: var(--navy); } }
+#job-status .pill + .pill { margin-left: 6px; }
 .pill.lang::before, .pill.plain::before { display: none; }
 @keyframes pulse { 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .pill.running::before, .step.current .dot { animation: none !important; } }
@@ -206,6 +209,7 @@ details.advanced .fields-3, details.advanced .fields-2 { margin-top: 12px; }
   padding: 12px 14px; border-radius: 12px; background: var(--paper-2); border: 1px solid var(--line);
 }
 .job:hover { border-color: var(--kraft); }
+.job .pills { display: flex; gap: 6px; align-items: center; }
 .job .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job .meta { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; font-size: .85rem; color: var(--ink-3); flex-wrap: wrap; }
 .bar { height: 6px; border-radius: 99px; background: var(--muted-bg); overflow: hidden; grid-column: 1 / -1; }

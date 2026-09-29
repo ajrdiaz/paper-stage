@@ -348,6 +348,9 @@ class AppTests(unittest.TestCase):
             self.assertEqual(client.post(f"/api/videos/{other['slug']}/publish/manual").status_code, 409)
             flags = {v["slug"]: v["en_tiktok"] for v in client.get("/api/videos").json()}
             self.assertTrue(flags[other["slug"]] and flags[job["slug"]])
+            jobs = {j["slug"]: j["en_tiktok"] for j in client.get("/api/jobs").json()}
+            self.assertTrue(jobs[other["slug"]] and jobs[job["slug"]])
+            self.assertTrue(client.get(f"/api/jobs/{other['id']}").json()["en_tiktok"])
             mark = res.json()["history"][0]["id"]
             self.assertEqual(client.delete(f"/api/videos/{other['slug']}/publish/{mark}").json()["history"], [])
             self.assertEqual(client.get("/api/videos/..%2Fx/publish").status_code, 404)
@@ -364,13 +367,16 @@ class AppTests(unittest.TestCase):
 class FakeNet:
     """Buffer y la descarga de Drive simulados; guarda lo que se envió a Buffer."""
 
-    def __init__(self, public=True, key_ok=True):
-        self.public, self.key_ok, self.posts = public, key_ok, []
+    def __init__(self, public=True, key_ok=True, login=False):
+        self.public, self.key_ok, self.login, self.posts = public, key_ok, login, []
 
     def __call__(self, method, url, headers, body):
         if url != publishing.BUFFER_API:
             if self.public:
                 return 206, {"Content-Type": "video/mp4"}, b"\x00\x00\x00\x18ftypmp42"
+            if self.login:  # carpeta sin compartir: Drive redirige a iniciar sesión
+                return 200, {"Content-Type": "text/html",
+                             "X-Final-URL": "https://accounts.google.com/ServiceLogin?service=wise"}, b"<html>"
             return 200, {"Content-Type": "text/html"}, b"<!doctype html><title>Google Drive</title>"
         if not self.key_ok:
             return 200, {}, json.dumps({"errors": [{"message": "Not authorized",
@@ -415,9 +421,10 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(publishing.text_units("🕷️a"), 4)  # un emoji cuenta 2 (más el selector de variante)
         text = publishing.default_text(json.loads((core.OUTPUT_DIR / self.slug / "publish.json").read_text()))
         self.assertEqual(text, "¿Las arañas se pegan? 🕷️\n\n#a #b #c #d #e")  # solo 5 hashtags
-        self.assertTrue(publishing.check_video_url("u", FakeNet())[0])
-        ok, detail = publishing.check_video_url("u", FakeNet(public=False))
-        self.assertFalse(ok)
+        self.assertEqual(publishing.check_video_url("u", FakeNet())[0], "ok")
+        self.assertEqual(publishing.check_video_url("u", FakeNet(public=False))[0], "other")
+        result, detail = publishing.check_video_url("u", FakeNet(public=False, login=True))
+        self.assertEqual(result, "login")
         self.assertIn("Cualquier persona con el enlace", detail)
         self.assertEqual(publishing.public_url("X"),
                          "https://drive.usercontent.google.com/download?id=X&export=download&confirm=t")
@@ -469,11 +476,19 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
             pub.mark_manual("no-existe-es")
 
     async def test_errors_are_readable(self):
+        # Carpeta sin compartir: falla rápido (sin agotar la espera) y dice cómo arreglarlo.
+        pub = self.publisher(FakeNet(public=False, login=True), sync_timeout=60, login_grace=0.05)
+        started = time.monotonic()
+        pub.start(self.slug, publishing.PublishRequest(text="Hola"))
+        st = await self.finish(pub, self.slug)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(st["state"], "failed")
+        self.assertIn("Cualquier persona con el enlace", st["step"])
+        # Drive aún procesando: espera hasta el límite y lo dice.
         pub = self.publisher(FakeNet(public=False), sync_timeout=0.1)
         pub.start(self.slug, publishing.PublishRequest(text="Hola"))
         st = await self.finish(pub, self.slug)
-        self.assertEqual(st["state"], "failed")
-        self.assertIn("Cualquier persona con el enlace", st["step"])
+        self.assertIn("aún lo esté procesando", st["step"])
         pub = self.publisher(FakeNet(key_ok=False))
         with self.assertRaises(publishing.PublishError) as ctx:
             await pub.channels()

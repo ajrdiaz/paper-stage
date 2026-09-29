@@ -55,6 +55,8 @@ const fmtSize = b => (b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Ma
 function pill(status) {
   return `<span class="pill ${esc(status)}">${esc(STATUS[status] || status)}</span>`;
 }
+// Junto al estado de producción: si el video ya está en TikTok (por Buffer o subido a mano).
+const tiktokPill = on => (on ? `<span class="pill tiktok">En TikTok</span>` : "");
 
 function toast(html, kind = "") {
   const el = document.createElement("div");
@@ -262,7 +264,7 @@ function jobRow(job) {
   return `
     <a class="job" href="#/trabajo/${esc(job.id)}">
       <span class="title">${esc(req.tema)}</span>
-      ${pill(job.status)}
+      <span class="pills">${tiktokPill(job.en_tiktok)}${pill(job.status)}</span>
       ${ACTIVE.has(job.status) || job.steps_done ? `<div class="bar" aria-hidden="true"><i style="width:${pct}%"></i></div>` : ""}
       <span class="meta">
         <span class="pill lang">${esc((req.idioma || "").toUpperCase())}</span>
@@ -550,7 +552,7 @@ async function renderJob(jobId) {
 
   function paint(j) {
     job = j;
-    $("#job-status").innerHTML = pill(j.status) + (j.queue_position ? ` <span class="small muted">puesto ${j.queue_position} en la cola</span>` : "");
+    $("#job-status").innerHTML = pill(j.status) + tiktokPill(j.en_tiktok) + (j.queue_position ? ` <span class="small muted">puesto ${j.queue_position} en la cola</span>` : "");
     const end = j.finished_at || (ACTIVE.has(j.status) ? Date.now() / 1000 : null);
     const elapsed = j.started_at && end ? fmtTime(end - j.started_at) : "—";
     $("#job-meta").textContent = `Tiempo: ${elapsed} · Turnos: ${j.turns || 0} · Costo: ${fmtCost(j.cost_usd)}`;
@@ -649,7 +651,7 @@ async function renderLibrary(params) {
           <div class="row small">
             ${v.idioma ? `<span class="pill lang">${esc(v.idioma.toUpperCase())}</span>` : ""}
             <span class="muted">${esc(charName(v.personaje))}</span>
-            ${v.en_tiktok ? `<span class="pill plain done">En TikTok</span>` : ""}
+            ${tiktokPill(v.en_tiktok)}
             ${v.has_video ? `<span class="pill done">Video listo</span>` : `<span class="pill">${v.steps_done}/${v.steps_total} pasos</span>`}
             ${v.qa ? `<span class="pill plain ${v.qa.failed ? "failed" : "done"}">QA ${v.qa.passed}/${v.qa.total}</span>` : ""}
             ${v.verify && !v.verify.ok ? `<span class="pill plain failed" title="La revisión automática encontró problemas">Revisar</span>` : ""}

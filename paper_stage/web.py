@@ -253,8 +253,14 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
 
     # ------------------------------------------------------------------ trabajos
 
+    def _with_tiktok(jobs: list[dict]) -> list[dict]:
+        published = publisher.published()
+        for job in jobs:
+            job["en_tiktok"] = job["slug"] in published
+        return jobs
+
     async def list_jobs(request: Request):
-        return JSONResponse(await asyncio.to_thread(manager.list))
+        return JSONResponse(_with_tiktok(await asyncio.to_thread(manager.list)))
 
     async def create_job(request: Request):
         try:
@@ -266,7 +272,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
 
     async def get_job(request: Request):
         job = manager.get(request.path_params["job_id"])
-        return JSONResponse(job) if job else _error("Trabajo no encontrado.", 404)
+        return JSONResponse(_with_tiktok([job])[0]) if job else _error("Trabajo no encontrado.", 404)
 
     def _job_action(action):
         async def endpoint(request: Request):

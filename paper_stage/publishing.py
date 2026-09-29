@@ -63,7 +63,8 @@ def http_request(method: str, url: str, headers: dict, body: bytes | None) -> tu
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=60) as res:
-            return res.status, dict(res.headers), res.read(64 * 1024)
+            # urlopen sigue las redirecciones: la URL final dice si Drive mandó a iniciar sesión.
+            return res.status, {**dict(res.headers), "X-Final-URL": res.geturl()}, res.read(64 * 1024)
     except urllib.error.HTTPError as exc:
         return exc.code, dict(exc.headers or {}), exc.read(64 * 1024)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -100,16 +101,25 @@ def public_url(file_id: str) -> str:
     return f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
 
 
-def check_video_url(url: str, http: Http) -> tuple[bool, str]:
-    """¿La URL sirve un MP4 a cualquiera, sin iniciar sesión? Lee solo los primeros bytes."""
+NOT_SHARED = ("el enlace pide iniciar sesión en Google: la carpeta no está compartida como "
+              "«Cualquier persona con el enlace». En drive.google.com: clic derecho en la carpeta → "
+              "Compartir → Acceso general → «Cualquier persona con el enlace» (Lector).")
+
+
+def check_video_url(url: str, http: Http) -> tuple[str, str]:
+    """¿La URL sirve un MP4 a cualquiera, sin iniciar sesión? Lee solo los primeros bytes.
+    Devuelve (resultado, detalle): "ok", "login" (no es público) u "other" (aún no está)."""
     status, headers, body = http("GET", url, {"Range": "bytes=0-1023"}, None)
-    kind = {k.lower(): v for k, v in headers.items()}.get("content-type", "")
+    low = {k.lower(): v for k, v in headers.items()}
+    kind = low.get("content-type", "")
     if status in (200, 206) and body[4:8] == b"ftyp":
-        return True, "el enlace público sirve el video"
+        return "ok", "el enlace público sirve el video"
+    if "accounts.google.com" in low.get("x-final-url", "") or "accounts.google.com" in low.get("location", "") \
+            or b"accounts.google.com" in body:
+        return "login", NOT_SHARED
     if "html" in kind or body.lstrip()[:1] == b"<":
-        return False, ("Drive responde con una página, no con el video: comparte la carpeta como "
-                       "«Cualquier persona con el enlace» o espera a que termine de subirlo.")
-    return False, f"Drive respondió {status} ({kind or 'sin tipo'})"
+        return "other", "Drive responde con una página, no con el video; puede que aún lo esté procesando."
+    return "other", f"Drive respondió {status} ({kind or 'sin tipo'})"
 
 
 # --------------------------------------------------------------------------- #
@@ -213,13 +223,16 @@ class Publisher:
                  drive_id: Callable[[Path], str | None] = drive_file_id,
                  sleep: Callable[[float], Awaitable] = asyncio.sleep,
                  poll: float = 5, sync_timeout: float = 20 * 60, demo: bool = False,
-                 default_folder: Path | None = None):
+                 default_folder: Path | None = None, login_grace: float = 120):
         self.db = db
         self.db.executescript(SCHEMA)
         self.db.commit()
         self.http, self.drive_id, self.sleep = http, drive_id, sleep
         self.poll, self.sync_timeout, self.demo = poll, sync_timeout, demo
         self.default_folder = default_folder
+        # Si Drive ya tiene el archivo pero su enlace pide iniciar sesión, esperar no sirve:
+        # la carpeta no está compartida. Solo se da un margen para que el permiso se propague.
+        self.login_grace = login_grace
         self.status: dict[str, dict] = {}
         self.tasks: dict[str, asyncio.Task] = {}
 
@@ -413,16 +426,24 @@ class Publisher:
 
     async def _wait_public(self, slug: str, dest: Path) -> str:
         self._step(slug, "Esperando a que Drive lo suba (unos minutos para ~60 MB)…")
-        deadline = time.monotonic() + self.sync_timeout
-        detail = "Drive todavía no registró el archivo."
-        while time.monotonic() < deadline:
+        start = time.monotonic()
+        detail, login_since = "Drive todavía no registró el archivo.", None
+        while time.monotonic() - start < self.sync_timeout:
             file_id = await asyncio.to_thread(self.drive_id, dest)
             if file_id:
-                url = public_url(file_id)
-                ok, detail = await asyncio.to_thread(check_video_url, url, self.http)
-                if ok:
+                result, detail = await asyncio.to_thread(check_video_url, public_url(file_id), self.http)
+                if result == "ok":
                     self._step(slug, "Drive ya sirve el video en un enlace público.")
-                    return url
+                    return public_url(file_id)
+                if result == "login":
+                    login_since = login_since or time.monotonic()
+                    if time.monotonic() - login_since >= self.login_grace:
+                        raise PublishError(f"Drive ya tiene el video, pero {detail}")
+                else:
+                    login_since = None
+            # Que se vea el motivo de la espera, no solo que se espera.
+            waited = int(time.monotonic() - start)
+            self.status[slug]["step"] = f"Esperando a Drive ({waited // 60}:{waited % 60:02d}): {detail}"
             await self.sleep(self.poll)
         raise PublishError(f"Pasaron {int(self.sync_timeout // 60)} min y el video no está disponible: {detail}")
 
