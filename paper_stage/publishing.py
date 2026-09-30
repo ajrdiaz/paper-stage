@@ -336,14 +336,22 @@ class Publisher:
         return {"status": self.status.get(slug), "history": self.history(slug)}
 
     def published(self) -> dict[str, str]:
-        """Slug → "publicado" (salió en TikTok o se subió a mano) o "programado" (en Buffer,
-        aún sin salir). Un envío que falló en Buffer no cuenta."""
+        """Slug → "publicado" (salió en TikTok o se subió a mano), "enviando" (Buffer lo está
+        subiendo ya: con «publicar ahora» tarda unos minutos) o "programado" (en Buffer, aún
+        sin salir). Un envío que falló en Buffer no cuenta."""
+        rank = {"programado": 0, "enviando": 1, "publicado": 2}
         states: dict[str, str] = {}
         for slug, mode, status in self.db.execute("SELECT slug, mode, status FROM publications"):
             if mode == MANUAL or status == "sent":
-                states[slug] = "publicado"
+                state = "publicado"
+            elif status == "sending":
+                state = "enviando"
             elif status not in ("error", "deleted"):
-                states.setdefault(slug, "programado")
+                state = "programado"
+            else:
+                continue
+            if rank[state] > rank.get(states.get(slug), -1):
+                states[slug] = state
         return states
 
     def refresh(self, slug: str, min_interval: float = 60) -> None:

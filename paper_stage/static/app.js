@@ -63,6 +63,7 @@ function pill(status) {
 }
 // Junto al estado de producción: si el video ya está en TikTok (por Buffer o subido a mano).
 const tiktokPill = state => (state === "publicado" || state === true ? `<span class="pill tiktok">En TikTok</span>`
+  : state === "enviando" ? `<span class="pill tiktok soon">Subiendo a TikTok</span>`
   : state === "programado" ? `<span class="pill tiktok soon">Programado en TikTok</span>` : "");
 
 function toast(html, kind = "") {
@@ -1274,6 +1275,7 @@ async function mountPublish(box, slug) {
   const sent = data.history.some(h => h.channel_id === cfg.channel_id) || manual;
   box.innerHTML = `
     <div class="row"><h3>Publicar en TikTok</h3>${tiktokPill(data.history.some(h => h.mode === "manual" || h.status === "sent") ? "publicado"
+      : data.history.some(h => h.status === "sending") ? "enviando"
       : data.history.some(h => !["error", "deleted"].includes(h.status)) ? "programado" : null)}
       <span class="spacer"></span><span class="small muted">${esc(cfg.channel_name)}</span></div>
     ${history()}${status()}

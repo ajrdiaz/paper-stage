@@ -492,13 +492,16 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
         pub.start(self.slug, publishing.PublishRequest(text="Hola"))
         await self.finish(pub, self.slug)
         self.assertEqual(pub.published()[self.slug], "programado")  # aún no salió
-        net.post_status = "sent"  # lo publicaron desde el panel de Buffer
+        net.post_status = "sending"  # «publicar ahora»: Buffer tarda unos minutos en subirlo
         pub.refresh(self.slug)
+        self.assertEqual(pub.published()[self.slug], "enviando")
+        net.post_status = "sent"  # lo publicaron desde el panel de Buffer
+        pub.refresh(self.slug, min_interval=0)
         row = pub.history(self.slug)[0]
         self.assertEqual((row["status"], row["sent_at"]), ("sent", "2026-09-29T01:00:00Z"))
         self.assertEqual(pub.published()[self.slug], "publicado")
         pub.refresh(self.slug, min_interval=0)  # ya es definitivo: no se vuelve a preguntar
-        self.assertEqual(net.status_queries, 1)
+        self.assertEqual(net.status_queries, 2)
         # Borrado en Buffer: deja de contar como publicado o programado.
         pub.start(self.slug, publishing.PublishRequest(text="Otra", again=True))
         await self.finish(pub, self.slug)
