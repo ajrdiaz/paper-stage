@@ -97,6 +97,7 @@ function onCleanup(fn) { cleanup.push(fn); }
 
 async function loadCharacters() {
   CHARACTERS = await api("/api/characters");
+  drawAccountPicker();
   return CHARACTERS;
 }
 const charById = id => CHARACTERS.find(c => c.id === id);
@@ -111,6 +112,41 @@ function savedCta(pid, lang) {
   // Antes de los personajes, la frase se guardaba solo por idioma (y era de Lía).
   return prefs[ctaKey(pid, lang)] ?? (pid === CONFIG.default_character ? prefs[`cta_${lang}`] : "") ?? "";
 }
+
+/* ------------------------------------------------------------------ cuentas de TikTok */
+
+// Cada personaje publica en una cuenta de TikTok, y varios pueden compartirla. El selector de
+// arriba deja ver solo los personajes, trabajos y videos de una cuenta, para no mezclar series.
+const ALL = "*";
+const accountOf = c => c?.canal?.id || "";  // "" = sin cuenta (o personaje borrado)
+const accountName = c => c?.canal?.nombre || "Sin cuenta de TikTok";
+
+function accounts() {
+  const seen = new Map();
+  for (const c of CHARACTERS) if (!seen.has(accountOf(c))) seen.set(accountOf(c), accountName(c));
+  return [...seen].map(([id, nombre]) => ({ id, nombre }));
+}
+// Una cuenta guardada que ya no tiene personajes cuenta como «todas».
+function currentAccount() {
+  const saved = loadPrefs().cuenta ?? ALL;
+  return saved !== ALL && accounts().some(a => a.id === saved) ? saved : ALL;
+}
+const inAccount = pid => currentAccount() === ALL || accountOf(charById(pid)) === currentAccount();
+function setAccount(id) {
+  savePrefs({ ...loadPrefs(), cuenta: id });
+  drawAccountPicker();
+}
+// Al llegar a un personaje de otra cuenta (un enlace, un video), se cambia a la suya.
+function showAccountOf(pid) {
+  if (pid && charById(pid) && !inAccount(pid)) setAccount(accountOf(charById(pid)));
+}
+function drawAccountPicker() {
+  const box = $("#account-picker"), list = accounts(), current = currentAccount();
+  box.hidden = list.length < 2;  // con una sola cuenta no hay nada que separar
+  $("select", box).innerHTML = `<option value="${ALL}">Todas las cuentas</option>` + list.map(a =>
+    `<option value="${esc(a.id)}" ${a.id === current ? "selected" : ""}>${esc(a.nombre)}</option>`).join("");
+}
+$("#account-picker select").addEventListener("change", ev => { setAccount(ev.target.value); route(); });
 
 function swatches(paleta) {
   return `<span class="swatches" aria-hidden="true">${(paleta || []).map(c => `<i style="background:${esc(c)}"></i>`).join("")}</span>`;
@@ -287,7 +323,7 @@ function jobRow(job) {
 
 /* ------------------------------------------------------------------ vista: estudio */
 
-function studioForm(prefs) {
+function studioForm(prefs, chars) {
   const ages = [...AGES];
   if (!ages.includes(prefs.edad)) ages.push(prefs.edad);
   return `
@@ -298,7 +334,7 @@ function studioForm(prefs) {
       <div class="row"><span class="label">Personaje</span><span class="spacer"></span>
         <a class="small" href="#/personajes/nuevo">+ Crear personaje</a></div>
       <div class="char-picker" role="radiogroup" aria-label="Personaje">
-        ${CHARACTERS.map(c => `<label class="char-chip"><input type="radio" name="personaje_id" value="${esc(c.id)}" ${prefs.personaje_id === c.id ? "checked" : ""}>
+        ${chars.map(c => `<label class="char-chip"><input type="radio" name="personaje_id" value="${esc(c.id)}" ${prefs.personaje_id === c.id ? "checked" : ""}>
           <span>${swatches(c.paleta)}<strong>${esc(c.nombre)}</strong><span class="small muted">${esc(c.nicho)}</span></span></label>`).join("")}
       </div>
     </div>
@@ -389,8 +425,10 @@ async function renderStudio(params) {
   const prefs = { edad: "6-9", idioma: "es", formato: "vertical", model: CONFIG.default_model, effort: "high", ...saved,
                   tema: params.get("tema") || "" };
   const asked = params.get("personaje");
+  showAccountOf(asked);
+  const chars = CHARACTERS.filter(c => inAccount(c.id));
   if (asked && charById(asked)) prefs.personaje_id = asked;
-  if (!charById(prefs.personaje_id)) prefs.personaje_id = charById(CONFIG.default_character) ? CONFIG.default_character : CHARACTERS[0]?.id;
+  if (!chars.some(c => c.id === prefs.personaje_id)) prefs.personaje_id = (chars.find(c => c.id === CONFIG.default_character) || chars[0])?.id;
   // Al elegir otro personaje (o llegar desde su ficha), el video toma su idioma y su edad.
   const chosen = charById(prefs.personaje_id);
   if (chosen && (asked || saved.personaje_id !== prefs.personaje_id)) Object.assign(prefs, { idioma: chosen.idioma, edad: chosen.edad });
@@ -399,7 +437,7 @@ async function renderStudio(params) {
     <div class="page-head"><div><h1>Estudio</h1>
       <p id="studio-intro">${studioIntro(chosen)}</p></div></div>
     <div class="grid-studio">
-      ${studioForm(prefs)}
+      ${studioForm(prefs, chars)}
       <section class="card stack" aria-labelledby="queue-title">
         <div class="row"><h2 id="queue-title">En producción</h2><span class="spacer"></span>
           <span class="small muted">${CONFIG.concurrency} a la vez</span></div>
@@ -516,7 +554,7 @@ async function renderStudio(params) {
   });
 
   async function loadJobs() {
-    const jobs = await api("/api/jobs");
+    const jobs = (await api("/api/jobs")).filter(j => inAccount(reqCharacter(j.request).id));
     const active = jobs.filter(j => ACTIVE.has(j.status)).reverse();
     const recent = jobs.filter(j => !ACTIVE.has(j.status)).slice(0, 5);
     $("#active-jobs").innerHTML = active.length ? active.map(jobRow).join("")
@@ -534,6 +572,7 @@ async function renderJob(jobId) {
   try { job = await api(`/api/jobs/${encodeURIComponent(jobId)}`); }
   catch (err) { view.innerHTML = `<div class="card empty"><span class="big">No encontré ese trabajo</span>${esc(err.message)}</div>`; return; }
   const req = job.request;
+  showAccountOf(reqCharacter(req).id);
   view.innerHTML = `
     <div class="page-head">
       <div><p class="small"><a href="#/">← Estudio</a></p><h1>${esc(req.tema)}</h1>
@@ -637,15 +676,19 @@ async function renderJob(jobId) {
 /* ------------------------------------------------------------------ vista: biblioteca */
 
 async function renderLibrary(params) {
-  const [videos] = await Promise.all([api("/api/videos"), loadCharacters()]);
+  const [all] = await Promise.all([api("/api/videos"), loadCharacters()]);
   const who = params.get("personaje") || "";
+  showAccountOf(who);
+  const videos = all.filter(v => inAccount(v.personaje));
+  const account = accounts().find(a => a.id === currentAccount());
   view.innerHTML = `
-    <div class="page-head"><div><h1>Biblioteca</h1><p>Todos los videos en <code>output/</code>, también los hechos desde la terminal.</p></div>
+    <div class="page-head"><div><h1>Biblioteca</h1><p>${account ? `Los videos de la cuenta <strong>${esc(account.nombre)}</strong>.`
+      : "Todos los videos en <code>output/</code>, también los hechos desde la terminal."}</p></div>
       <div class="row">
         <select id="lib-pub" class="search" aria-label="Publicación"><option value="">Publicados y sin publicar</option>
           <option value="no">Sin publicar en TikTok</option><option value="si">Ya en TikTok</option></select>
         <select id="lib-char" class="search" aria-label="Personaje"><option value="">Todos los personajes</option>
-          ${CHARACTERS.map(c => `<option value="${esc(c.id)}" ${who === c.id ? "selected" : ""}>${esc(c.nombre)}</option>`).join("")}</select>
+          ${CHARACTERS.filter(c => inAccount(c.id)).map(c => `<option value="${esc(c.id)}" ${who === c.id ? "selected" : ""}>${esc(c.nombre)}</option>`).join("")}</select>
         <input type="text" class="search" id="search" placeholder="Buscar…" aria-label="Buscar videos"></div></div>
     <div id="gallery" class="gallery"></div>`;
   const draw = () => {
@@ -744,6 +787,7 @@ async function renderVideo(slug) {
   let v;
   try { [v] = await Promise.all([api(`/api/videos/${encodeURIComponent(slug)}`), loadCharacters()]); }
   catch (err) { view.innerHTML = `<div class="card empty"><span class="big">No encontré ese video</span>${esc(err.message)}</div>`; return; }
+  showAccountOf(v.personaje);
   const script = v.json["script.json"] || {};
   const publish = v.json["publish.json"] || {};
   const lastJob = v.jobs[0];
@@ -884,6 +928,7 @@ async function renderCharacters() {
           ${swatches(c.paleta)}
           <div class="row small"><span class="pill lang">${esc(c.idioma.toUpperCase())}</span>
             <span class="muted">${esc(c.edad)} años · ${c.videos === 1 ? "1 video" : `${c.videos} videos`}</span></div>
+          <span class="small ${c.canal ? "muted" : ""}" ${c.canal ? "" : `style="color:var(--warn)"`}>TikTok: ${esc(c.canal ? c.canal.nombre : "sin cuenta, no se puede publicar")}</span>
           <div class="row">
             <a class="btn small primary" href="#/?personaje=${encodeURIComponent(c.id)}">Producir video</a>
             ${c.videos ? `<a class="btn small" href="#/biblioteca?personaje=${encodeURIComponent(c.id)}">Videos</a>` : ""}
@@ -940,6 +985,10 @@ function characterForm(c, isNew) {
     </div>
     <div class="field"><label for="c-voz-estilo">Cómo suena</label>
       <input id="c-voz-estilo" name="voz_estilo" type="text" maxlength="200" autocomplete="off" value="${esc(c.voz_estilo || "")}" placeholder="Ej.: juvenil, curiosa y un poco susurrada"></div>
+    <div class="field"><label for="c-canal">Cuenta de TikTok</label>
+      <select id="c-canal" name="canal"><option value="">Sin cuenta: no se puede publicar</option>
+        ${c.canal ? `<option value="${esc(c.canal.id)}" selected>${esc(c.canal.nombre)}</option>` : ""}</select>
+      <span class="hint" id="c-canal-hint">Donde se publican sus videos. Varios personajes pueden compartir una cuenta; para una serie aparte, conecta otra cuenta de TikTok en Buffer.</span></div>
     <div class="fields-2">
       <div class="field"><label for="c-cta-es">Frase final en español</label>
         <input id="c-cta-es" name="cta_es" type="text" maxlength="80" autocomplete="off" value="${esc(c.cta?.es || "")}" placeholder="${esc(CONFIG.default_cta.es)}"></div>
@@ -994,6 +1043,20 @@ async function renderCharacterEditor(id) {
     </div>`;
 
   const form = $("#char-form");
+  // Las cuentas vienen de Buffer: se cargan aparte para no frenar la ficha.
+  const canal = $("#c-canal");
+  (async () => {
+    const cfg = await api("/api/publishing");
+    if (!cfg.buffer_key) {
+      $("#c-canal-hint").innerHTML = `Para elegirla, guarda antes la clave de Buffer en <a href="#/sistema">Sistema</a>.`;
+      return;
+    }
+    const channels = await api("/api/publishing/channels");
+    const current = canal.value, lost = current && !channels.some(ch => ch.id === current);
+    canal.innerHTML = `<option value="">Sin cuenta: no se puede publicar</option>`
+      + (lost ? `<option value="${esc(current)}" selected>${esc(canal.selectedOptions[0].textContent)} (ya no está en Buffer)</option>` : "")
+      + channels.map(ch => `<option value="${esc(ch.id)}" ${ch.id === current ? "selected" : ""}>${esc(ch.nombre)}</option>`).join("");
+  })().catch(err => { $("#c-canal-hint").textContent = `No se pudieron cargar las cuentas de Buffer: ${err.message}`; });
   const drawPalette = () => {
     $("#palette").innerHTML = palette.map((c, i) => `
       <span class="swatch-input"><input type="color" value="${esc(c.toLowerCase())}" data-i="${i}" aria-label="Color ${i + 1}">
@@ -1076,6 +1139,10 @@ async function renderCharacterEditor(id) {
       const saved = isNew
         ? await api("/api/characters", { method: "POST", body })
         : await api(`/api/characters/${encodeURIComponent(existing.id)}`, { method: "PUT", body });
+      if (canal.value !== (existing?.canal?.id || "")) {
+        await api(`/api/publishing/channels/${encodeURIComponent(saved.id)}`, { method: "PUT",
+          body: { channel_id: canal.value, channel_name: canal.value ? canal.selectedOptions[0].textContent : "" } });
+      }
       toast(isNew ? `${esc(saved.nombre)} ya está en el estudio. Elige el tema de su primer video.` : "Cambios guardados.", "ok");
       location.hash = isNew ? `#/?personaje=${encodeURIComponent(saved.id)}` : "#/personajes";
     } catch (err) {
@@ -1148,7 +1215,7 @@ function pubState(h) {
 const fmtUnits = text => text.length; // Buffer cuenta unidades UTF-16, igual que .length en JS
 
 async function mountPublishingSetup(box) {
-  let cfg = await api("/api/publishing");
+  let [cfg] = await Promise.all([api("/api/publishing"), loadCharacters()]);
   const draw = () => {
     box.innerHTML = `
       <div class="row"><h2>Publicar en TikTok</h2><span class="spacer"></span>
@@ -1170,10 +1237,12 @@ async function mountPublishingSetup(box) {
             <button class="btn small" id="pub-key-save" ${cfg.buffer_key_env ? "disabled" : ""}>Guardar</button></div>
           <span class="hint">${cfg.buffer_key_env ? "Viene de la variable PAPER_STAGE_BUFFER_KEY." :
             "En Buffer, conecta tu cuenta de TikTok y crea una clave en la sección API de la configuración (solo la persona dueña de la organización puede). Se guarda solo en este equipo, en data/."}</span></li>
-        <li><strong>Cuenta de TikTok</strong>
-          <div class="row"><select id="pub-channel" aria-label="Cuenta de TikTok">
-              ${cfg.channel_id ? `<option value="${esc(cfg.channel_id)}">${esc(cfg.channel_name || cfg.channel_id)}</option>` : `<option value="">(ninguna)</option>`}</select>
-            <button class="btn small" id="pub-channels" ${cfg.buffer_key ? "" : "disabled"}>Cargar cuentas de Buffer</button></div></li>
+        <li><strong>Cuenta de TikTok de cada personaje</strong>
+          <ul class="pub-history">${CHARACTERS.map(c => `<li>${esc(c.nombre)} →
+            ${c.canal ? esc(c.canal.nombre) : `<span style="color:var(--warn)">sin cuenta</span>`}
+            <a class="small" href="#/personajes/${encodeURIComponent(c.id)}">${c.canal ? "Cambiar" : "Elegir"}</a></li>`).join("")}</ul>
+          <span class="hint">Se elige en la ficha de cada personaje. Varios pueden compartir cuenta; para una serie aparte, conecta
+            otra cuenta de TikTok en Buffer. Un personaje sin cuenta no puede publicar, así nada sale en la cuenta equivocada.</span></li>
         <li><label class="row"><input type="checkbox" id="pub-ai" ${cfg.ai_label ? "checked" : ""}>
           Declarar en TikTok que el contenido está generado con IA</label>
           <span class="hint">Recomendado: el guion, la voz y la animación los hace la IA, y TikTok pide declararlo.</span></li>
@@ -1200,17 +1269,6 @@ async function mountPublishingSetup(box) {
     const id = ev.target.id;
     if (id === "pub-folder-save") save({ drive_folder: $("#pub-folder", box).value, create_folder: true });
     if (id === "pub-key-save") save({ buffer_key: $("#pub-key", box).value });
-    if (id === "pub-channels") {
-      ev.target.disabled = true;
-      try {
-        const channels = await api("/api/publishing/channels");
-        const sel = $("#pub-channel", box);
-        sel.innerHTML = channels.length ? channels.map(c => `<option value="${esc(c.id)}" ${c.id === cfg.channel_id ? "selected" : ""}>${esc(c.nombre)}</option>`).join("")
-          : `<option value="">No hay cuentas de TikTok conectadas en Buffer</option>`;
-        if (channels.length && !cfg.channel_id) save({ channel_id: channels[0].id, channel_name: channels[0].nombre });
-      } catch (err) { $("#pub-error", box).textContent = err.message; }
-      finally { ev.target.disabled = false; }
-    }
     if (id === "pub-test") {
       ev.target.disabled = true;
       ev.target.textContent = "Probando…";
@@ -1221,7 +1279,6 @@ async function mountPublishingSetup(box) {
     }
   });
   box.addEventListener("change", ev => {
-    if (ev.target.id === "pub-channel" && ev.target.value) save({ channel_id: ev.target.value, channel_name: ev.target.selectedOptions[0].textContent });
     if (ev.target.id === "pub-ai") save({ ai_label: ev.target.checked });
   });
 }
@@ -1241,7 +1298,7 @@ async function mountPublish(box, slug) {
   const path = `/api/videos/${encodeURIComponent(slug)}/publish`;
   let data;
   try { data = await api(path); } catch (err) { box.innerHTML = `<p class="small">${esc(err.message)}</p>`; return; }
-  const cfg = data.config;
+  const cfg = data.config, channel = data.channel;
   const manual = data.history.some(h => h.mode === "manual");
   const history = () => data.history.length ? `<ul class="pub-history">${data.history.map(h => `
     <li>${h.status === "error" ? "✗" : "✓"} ${esc(h.channel_name || "TikTok")} · ${esc(pubState(h))}
@@ -1271,13 +1328,20 @@ async function mountPublish(box, slug) {
       <div class="row">${markButton}</div>`;
     return;
   }
+  if (!channel) {
+    box.innerHTML = `<div class="row"><h3>Publicar en TikTok</h3></div>${history()}
+      <p class="small">${esc(charName(data.personaje))} no tiene cuenta de TikTok, así que este video no se puede publicar
+        desde aquí. <a href="#/personajes/${encodeURIComponent(data.personaje)}">Elígela en su ficha</a>.</p>
+      <div class="row">${markButton}</div>`;
+    return;
+  }
   const running = data.status?.state === "running";
-  const sent = data.history.some(h => h.channel_id === cfg.channel_id) || manual;
+  const sent = data.history.some(h => h.channel_id === channel.id) || manual;
   box.innerHTML = `
     <div class="row"><h3>Publicar en TikTok</h3>${tiktokPill(data.history.some(h => h.mode === "manual" || h.status === "sent") ? "publicado"
       : data.history.some(h => h.status === "sending") ? "enviando"
       : data.history.some(h => !["error", "deleted"].includes(h.status)) ? "programado" : null)}
-      <span class="spacer"></span><span class="small muted">${esc(cfg.channel_name)}</span></div>
+      <span class="spacer"></span><span class="small muted">${esc(channel.nombre)}</span></div>
     ${history()}${status()}
     ${manual && !running ? `<p class="small muted">Ya está en TikTok. Si de verdad quieres enviarlo otra vez por Buffer,
       <button type="button" class="btn small" id="pub-show">muestra el formulario</button>.</p>` : ""}
@@ -1312,9 +1376,9 @@ async function mountPublish(box, slug) {
   $("#pub-form", box).addEventListener("submit", async ev => {
     ev.preventDefault();
     const mode = $("input[name=pub-mode]:checked", box).value, when = $("#pub-when", box).value;
-    if (mode === "now" && !confirmAction("¿Publicar este video en TikTok ahora mismo?")) return;
+    if (mode === "now" && !confirmAction(`¿Publicar este video ahora mismo en ${channel.nombre}?`)) return;
     if (sent && !confirmAction(manual ? "Este video ya está en TikTok (subido a mano). ¿Enviarlo otra vez por Buffer?"
-      : "Este video ya se envió a esa cuenta. ¿Enviarlo otra vez?")) return;
+      : `Este video ya se envió a ${channel.nombre}. ¿Enviarlo otra vez?`)) return;
     // Bloquea el formulario desde el clic: un segundo clic no debe lanzar otro envío.
     const fields = $("fieldset", ev.target), button = $("#pub-submit", box), label = button.textContent;
     fields.disabled = true;
@@ -1372,5 +1436,6 @@ async function route() {
   window.addEventListener("hashchange", route);
   refreshBanner();
   watchJobs();
+  loadCharacters().catch(() => {});
   route();
 })();

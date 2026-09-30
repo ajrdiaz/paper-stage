@@ -109,6 +109,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             from .demo import demo_publisher_parts
             parts = demo_publisher_parts(manager.data_dir)
         publisher = Publisher(manager.store.db, **parts)
+    publisher.migrate_channels([c.id for c in manager.characters.list()])
     if character_suggester is None:
         if demo:
             from .demo import suggest_characters_demo as character_suggester
@@ -191,7 +192,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         mine = [v for v in videos if v["personaje"] == character.id]
         done = [v for v in mine if v["has_video"]]
         return {**character.to_dict(), "hashtag": character.hashtag, "videos": len(mine),
-                "ultimo_video": done[0]["slug"] if done else None}
+                "ultimo_video": done[0]["slug"] if done else None, "canal": publisher.channel_for(character.id)}
 
     async def list_characters(request: Request):
         videos = await asyncio.to_thread(library.list_videos)
@@ -227,6 +228,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         if character_id in manager.active_characters():
             return _error("Este personaje tiene videos en producción.", 409)
         manager.characters.delete(character_id)
+        publisher.set_channel(character_id, "")
         return JSONResponse({"ok": True})
 
     async def suggest_characters(request: Request):
@@ -341,6 +343,19 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         except PublishError as exc:
             return _error(str(exc), 502)
 
+    async def character_channel(request: Request):
+        """Asigna la cuenta de TikTok (canal de Buffer) de un personaje; vacía, se la quita."""
+        character_id = request.path_params["character_id"]
+        if not manager.characters.get(character_id):
+            return _error("Personaje no encontrado.", 404)
+        try:
+            payload = await _json(request)
+        except ValueError as exc:
+            return _error(str(exc))
+        channel_id = str(payload.get("channel_id") or "").strip()
+        publisher.set_channel(character_id, channel_id, str(payload.get("channel_name") or "").strip())
+        return JSONResponse({"canal": publisher.channel_for(character_id)})
+
     async def publishing_test(request: Request):
         if request.method == "GET":
             return JSONResponse(publisher.state(TEST_SLUG))
@@ -359,7 +374,8 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             await asyncio.to_thread(publisher.refresh, slug)
             publish = library.read_json(out_dir / "publish.json")
             text = default_text(publish if isinstance(publish, dict) else {})
-            return JSONResponse({**publisher.state(slug), "default_text": text,
+            personaje, channel = publisher.video_channel(slug)
+            return JSONResponse({**publisher.state(slug), "default_text": text, "personaje": personaje, "channel": channel,
                                  "default_units": text_units(text), "config": publisher.config()})
         try:
             payload = await _json(request)
@@ -464,6 +480,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Route("/api/publishing", publishing_config),
         Route("/api/publishing", save_publishing, methods=["PUT"]),
         Route("/api/publishing/channels", publishing_channels),
+        Route("/api/publishing/channels/{character_id}", character_channel, methods=["PUT"]),
         Route("/api/publishing/test", publishing_test, methods=["GET", "POST"]),
         Route("/poster/{slug}.jpg", poster),
         Route("/cover/{slug}.jpg", cover),

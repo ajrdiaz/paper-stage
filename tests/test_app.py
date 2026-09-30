@@ -310,8 +310,11 @@ class AppTests(unittest.TestCase):
             res = client.put("/api/characters/coral", json={**CORAL, "nicho": "Criaturas del arrecife"})
             self.assertEqual(res.json()["nicho"], "Criaturas del arrecife")
             self.assertEqual(client.put("/api/characters/nadie", json=CORAL).status_code, 404)
+            self.assertIsNone(listed["coral-2"]["canal"])  # los personajes nuevos empiezan sin cuenta
+            client.put("/api/publishing/channels/coral-2", json={"channel_id": "tt2", "channel_name": "@coral"})
             self.assertEqual(client.delete("/api/characters/coral-2").status_code, 200)
             self.assertEqual(client.get("/api/characters/coral-2").status_code, 404)
+            self.assertIsNone(client.app.state.publisher.channel_for("coral-2"))  # su cuenta no queda huérfana
 
     def test_publish_api_demo(self):
         with self.make_client(data="data-publish") as client:
@@ -324,10 +327,19 @@ class AppTests(unittest.TestCase):
                                                       "drive_folder": client.get("/api/publishing").json()["drive_folder"]}).json()
             self.assertEqual((cfg["buffer_key"], cfg["buffer_key_hint"]), (True, "…1234"))
             self.assertNotIn("clave-demo-1234", json.dumps(cfg))  # la clave nunca vuelve al navegador
-            channels = client.get("/api/publishing/channels").json()
-            cfg = client.put("/api/publishing", json={"channel_id": channels[0]["id"], "channel_name": channels[0]["nombre"]}).json()
             self.assertTrue(cfg["ready"])
+            # Sin cuenta de TikTok asignada al personaje, no se publica.
             info = client.get(f"/api/videos/{job['slug']}/publish").json()
+            self.assertEqual((info["personaje"], info["channel"]), (core.LIA.id, None))
+            self.assertIn("no tiene cuenta", client.post(f"/api/videos/{job['slug']}/publish", json={"text": "Hola"}).json()["error"])
+            channels = client.get("/api/publishing/channels").json()
+            res = client.put(f"/api/publishing/channels/{core.LIA.id}", json={"channel_id": channels[0]["id"], "channel_name": channels[0]["nombre"]})
+            self.assertEqual(res.json()["canal"], {"id": channels[0]["id"], "nombre": channels[0]["nombre"]})
+            self.assertEqual(client.put("/api/publishing/channels/nadie", json={"channel_id": "x"}).status_code, 404)
+            lia = client.get(f"/api/characters/{core.LIA.id}").json()
+            self.assertEqual(lia["canal"]["id"], channels[0]["id"])
+            info = client.get(f"/api/videos/{job['slug']}/publish").json()
+            self.assertEqual(info["channel"]["id"], channels[0]["id"])
             self.assertIn("#", info["default_text"])
             res = client.post(f"/api/videos/{job['slug']}/publish", json={"text": info["default_text"], "mode": "now"})
             self.assertEqual(res.status_code, 200, res.text)
@@ -421,7 +433,8 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
                                    drive_id=lambda p: "ID123" if p.exists() else None,
                                    demo=True, default_folder=self.folder, **kw)
         pub.save_config({"buffer_key": "clave-de-prueba-123", "drive_folder": str(self.folder),
-                         "create_folder": True, "channel_id": "tt1", "channel_name": "@teatrito"})
+                         "create_folder": True})
+        pub.set_channel(core.LIA.id, "tt1", "@teatrito")
         return pub
 
     async def finish(self, pub, slug):
@@ -462,6 +475,41 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
         pub.start(self.slug, publishing.PublishRequest(text="Hola", mode="now", ai_label=False, again=True))
         await self.finish(pub, self.slug)
         self.assertEqual((net.posts[1]["mode"], net.posts[1]["metadata"]["tiktok"]["isAiGenerated"]), ("shareNow", False))
+
+    async def test_channel_per_character(self):
+        net = FakeNet()
+        pub = self.publisher(net)
+        # Un video de otro personaje va a la cuenta de ese personaje, no a la de Lía.
+        slug = "video-de-coral-es"
+        out = core.OUTPUT_DIR / slug
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "final.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"0" * 1000)
+        (out / "script.json").write_text(json.dumps({"personaje": "coral"}), encoding="utf-8")
+        with self.assertRaises(publishing.PublishError) as ctx:
+            pub.start(slug, publishing.PublishRequest(text="Hola"))
+        self.assertIn("no tiene cuenta", str(ctx.exception))
+        self.assertEqual(pub.mark_manual(slug)["history"][0]["channel_id"], "")  # sin cuenta: se marca igual
+        pub.set_channel("coral", "tt2", "@coral")
+        self.assertEqual(pub.video_channel(slug), ("coral", {"id": "tt2", "nombre": "@coral"}))
+        pub.start(slug, publishing.PublishRequest(text="Hola", again=True))
+        await self.finish(pub, slug)
+        self.assertEqual(net.posts[0]["channelId"], "tt2")
+        self.assertEqual(pub.history(slug)[0]["channel_name"], "@coral")
+        pub.set_channel("coral", "")
+        self.assertIsNone(pub.channel_for("coral"))
+
+    def test_migrate_single_channel(self):
+        # Antes había una sola cuenta: pasa a los personajes que ya existían, sin pisar otras.
+        pub = publishing.Publisher(sqlite3.connect(":memory:"), demo=True, default_folder=self.folder)
+        pub._set("channel_id", "tt1")
+        pub._set("channel_name", "@mikavali")
+        pub.set_channel("chispi", "tt9", "@otra")
+        pub.migrate_channels(["lia", "chispi"])
+        self.assertEqual(pub.channels_by_character(), {"lia": {"id": "tt1", "nombre": "@mikavali"},
+                                                       "chispi": {"id": "tt9", "nombre": "@otra"}})
+        self.assertEqual(pub._get("channel_id"), "")
+        pub.migrate_channels(["nuevo"])  # solo una vez: los personajes nuevos empiezan sin cuenta
+        self.assertIsNone(pub.channel_for("nuevo"))
 
     async def test_manual_mark(self):
         net = FakeNet()
