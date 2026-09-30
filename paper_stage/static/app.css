@@ -266,6 +266,15 @@ details.advanced .fields-3, details.advanced .fields-2 { margin-top: 12px; }
 .suggestion { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); color: inherit; font: inherit; cursor: pointer; }
 .suggestion:hover { background: var(--muted-bg); }
 .suggestion[aria-checked="true"] { border-color: var(--navy); box-shadow: 0 0 0 2px var(--navy) inset; }
+/* Mientras Claude piensa (tarda unos segundos): rueda y tarjetas fantasma donde saldrán las sugerencias */
+.loading { display: flex; align-items: center; gap: 8px; margin: 0; }
+.spinner { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--teal); animation: spin .8s linear infinite; }
+.suggestion.skeleton { min-height: 56px; cursor: default; border-color: transparent; background: var(--muted-bg); animation: pulse 1.4s ease-in-out infinite; }
+.suggestion.skeleton.idea { min-height: 200px; }
+.suggestion.skeleton:nth-of-type(2) { animation-delay: .2s; }
+.suggestion.skeleton:nth-of-type(3) { animation-delay: .4s; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner, .suggestion.skeleton { animation: none; } }
 .checks { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; }
 .checks li { display: grid; grid-template-columns: 1.4em 1fr auto; gap: 8px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--paper-2); }
 .checks li.ok > span:first-child { color: var(--ok); font-weight: 700; }

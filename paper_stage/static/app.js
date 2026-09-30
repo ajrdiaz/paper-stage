@@ -29,6 +29,12 @@ function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Mientras Claude piensa sugerencias: rueda con el texto y tres tarjetas fantasma.
+function loadingCards(text, cls = "") {
+  return `<p class="small muted loading"><span class="spinner" aria-hidden="true"></span>${esc(text)}</p>`
+    + `<span class="suggestion skeleton ${cls}" aria-hidden="true"></span>`.repeat(3);
+}
+
 async function api(path, options = {}) {
   const init = { headers: {}, ...options };
   if (init.body && typeof init.body !== "string") {
@@ -416,8 +422,10 @@ async function renderStudio(params) {
   let shown = [];
   const list = $("#suggest-list");
   async function suggest() {
+    if (list.getAttribute("aria-busy") === "true") return;  // Enter en la pista no debe lanzar otra petición
     const { idioma, edad, personaje_id } = Object.fromEntries(new FormData(form).entries());
-    list.innerHTML = `<p class="small muted">${esc(charById(personaje_id)?.nombre || "El personaje")} está pensando temas…</p>`;
+    list.innerHTML = loadingCards(`${charById(personaje_id)?.nombre || "El personaje"} está pensando temas…`);
+    list.setAttribute("aria-busy", "true");
     $("#suggest-more").disabled = true;
     try {
       const res = await api("/api/suggest", { method: "POST", body: { idioma, edad, personaje_id, pista: $("#pista").value, evitar: shown } });
@@ -427,7 +435,7 @@ async function renderStudio(params) {
           <strong>${esc(t.tema)}</strong>${t.gancho ? `<span class="small muted">${esc(t.gancho)}</span>` : ""}</button>`).join("");
     } catch (err) {
       list.innerHTML = `<p class="small" style="color:var(--warn)">${esc(err.message)}</p>`;
-    } finally { $("#suggest-more").disabled = false; }
+    } finally { $("#suggest-more").disabled = false; list.removeAttribute("aria-busy"); }
   }
   $("#suggest-open").addEventListener("click", () => {
     const panel = $("#suggest-panel");
@@ -468,7 +476,7 @@ async function renderStudio(params) {
     resetSuggestions();
   }));
   list.addEventListener("click", ev => {
-    const pick = ev.target.closest(".suggestion");
+    const pick = ev.target.closest(".suggestion:not(.skeleton)");
     if (!pick) return;
     $$(".suggestion", list).forEach(b => b.setAttribute("aria-checked", b === pick));
     $("#tema").value = pick.dataset.tema;
@@ -1018,9 +1026,11 @@ async function renderCharacterEditor(id) {
     let ideas = [], shown = [];
     const box = $("#ideas");
     const propose = async () => {
+      if (box.getAttribute("aria-busy") === "true") return;
       const idioma = $("input[name=idea_idioma]:checked").value, edad = $("#idea-edad").value;
       $("#ideas-go").disabled = true;
-      box.innerHTML = `<p class="small muted">Pensando personajes…</p>`;
+      box.innerHTML = loadingCards("Pensando personajes…", "idea");
+      box.setAttribute("aria-busy", "true");
       try {
         const res = await api("/api/characters/suggest", { method: "POST", body: { idioma, edad, pista: $("#idea-pista").value, evitar: shown } });
         ideas = res.personajes;
@@ -1037,12 +1047,12 @@ async function renderCharacterEditor(id) {
         $("#ideas-note").textContent = "Elige una para rellenar la ficha; luego puedes cambiar lo que quieras.";
       } catch (err) {
         box.innerHTML = `<p class="small" style="color:var(--warn)">${esc(err.message)}</p>`;
-      } finally { $("#ideas-go").disabled = false; }
+      } finally { $("#ideas-go").disabled = false; box.removeAttribute("aria-busy"); }
     };
     $("#ideas-go").addEventListener("click", propose);
     $("#idea-pista").addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); propose(); } });
     box.addEventListener("click", ev => {
-      const pick = ev.target.closest(".idea");
+      const pick = ev.target.closest(".idea:not(.skeleton)");
       if (!pick) return;
       $$(".idea", box).forEach(b => b.setAttribute("aria-checked", b === pick));
       fill(ideas[Number(pick.dataset.i)].personaje);
