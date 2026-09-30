@@ -42,7 +42,7 @@ Mantiene las 7 escenas y el cierre circular del video de referencia (se empieza 
 | # | Tiempo aprox. | Escena | Función viral |
 |---|---|---|---|
 | 1 | 0.0–7 s | **La idea** — {{PERSONAJE}} en su escenario, con un dibujo o un objeto del tema a la vista y líneas de "idea" alrededor de su cabeza | **Gancho** en la primera frase, de 3 s de voz como máximo y de uno de los tipos de abajo. La voz empieza en ≤0.3 s y hay movimiento desde el frame 1. El gancho va también **escrito** en pantalla desde el frame 1 (`texto_gancho`, §7), porque muchos ven TikTok sin sonido; hacia los 3 s ese texto se transforma en el título en crayón. |
-| 2 | 7–16 s | **¿Qué es X?** — cámara entra al dibujo | Base simple con una comparación concreta del mundo del niño. **Bucle abierto**: "…y al final vas a ver qué le pasa cuando se hace chiquitito." |
+| 2 | 7–16 s | **¿Qué es X?** — cámara entra al dibujo | Base simple con una comparación concreta del mundo del niño, que casi cualquier niño de esa edad haya vivido (ver «Que un niño lo entienda a la primera», abajo). **Bucle abierto**: "…y al final vas a ver qué le pasa cuando se hace chiquitito." |
 | 3 | 16–26 s | **El borde / el detalle clave** | Primer "¡guau!". Micro-gancho: "Y aquí viene lo más raro…" |
 | 4 | 26–37 s | **El corazón del concepto**, con personajes de papel (p. ej. dos confetis que se vuelven personajes coral y teal) | La explicación central, personificada. Es la escena más larga. |
 | 5 | 37–46 s | **Mini-quiz** | "¿Qué crees que pasa? ¡Dilo en voz alta!", con 2 opciones dibujadas en crayón y 1.5 s de pausa con un tic-tac. Aumenta los rewatches y los comentarios. |
@@ -69,6 +69,11 @@ Mantiene las 7 escenas y el cierre circular del video de referencia (se empieza 
 
 **Reglas de contenido infantil (no negociables):**
 - Datos correctos, simplificados sin mentir. Si un tema tiene matices (como la radiación de Hawking), usa "los científicos creen…" o "una forma sencilla de imaginarlo es…".
+- **Que un niño de `{{EDAD}}` años lo entienda a la primera.** El video se oye una sola vez y rápido: cada línea se entiende sola, sin pausar ni saber nada más.
+  - Las comparaciones usan algo que casi cualquier niño de esa edad ha vivido, viva donde viva: jugar, comer, bañarse, el patio, una puerta, un globo. Evita lo que depende del clima, del país o de la familia (la ropa de lana, la nieve, una chimenea, un deporte o una comida local).
+  - La frase dice qué pasa, no solo con qué se compara: "como el toquecito que a veces te da una puerta" y no "como la de tu suéter", que da por hecho que el niño sabe de qué chispa se habla.
+  - Palabras que ese niño usa. Como mucho una palabra nueva por escena, y se explica en la misma frase o se ve en pantalla. Las cifras y medidas van con algo que el niño conozca ("tan alto como diez jirafas").
+  - El dibujo muestra la comparación mientras se dice, para que se entienda también sin sonido.
 - Nada de miedo, violencia, burlas ni consumo. El gancho despierta curiosidad; nunca es clickbait falso.
 - El CTA es la frase fija "{{CTA}}": no le pidas a los niños comentarios ni datos. Marca el video como "Hecho para niños".
 - Solo personajes originales. Nada de personajes, marcas ni música con copyright.
@@ -198,6 +203,7 @@ Marca cada punto con `[x]` o `[ ]` y anota la medida real. Un punto sin cumplir 
 - [ ] Determinismo: captura tres instantes en orden, luego en orden inverso y uno más en una página recién cargada; los píxeles del mismo instante deben coincidir.
 - [ ] Captura `stage.html` con `renderAt` cada 3 s, más el primer y el último frame, y **míralos todos**: estilo de papel consistente, {{PERSONAJE}} y su escenario siempre iguales (y como en sus videos anteriores, si los hay), nada fuera de la zona segura, subtítulos legibles y sin cortar, sin frames vacíos, movimiento en el frame 1, y el primero y el último se parecen (loop).
 - [ ] Cada dato del guion está respaldado en `research.md`, y el tema está contado desde el nicho de la serie.
+- [ ] Comprensión (§2): lee cada `vo` como un niño de `{{EDAD}}` años que la oye una sola vez. Anota cada comparación, qué vivencia del niño usa y por qué casi cualquier niño de esa edad la conoce, y cada palabra difícil con dónde se explica. Si una línea necesita contexto que no está en la frase, reescríbela antes de seguir.
 - [ ] El bucle abierto de la escena 2 se cierra en la escena 6.
 - [ ] {{PERSONAJE}} cierra con el CTA exacto: "{{CTA}}".
 - [ ] Todo el texto y el audio están en `{{IDIOMA}}`.
