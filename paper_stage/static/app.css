@@ -355,6 +355,7 @@ details.advanced .fields-3, details.advanced .fields-2 { margin-top: 12px; }
 .radar-niche { gap: 8px; padding: 16px; box-shadow: none; }
 .radar-niche p { margin: 0; }
 .radar-signals { margin: 0; padding-left: 18px; }
+.radar-found { gap: 6px; padding: 10px 12px; border-radius: 10px; background: var(--paper-2); }
 
 /* ------------------------------------------------------------ detalle de video */
 .video-layout { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 28px; align-items: start; }

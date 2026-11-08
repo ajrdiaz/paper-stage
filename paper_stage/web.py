@@ -464,6 +464,9 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
     async def _radar_niches(request: Request):
         radar.start_niches((await _json(request)).get("tema"))
 
+    async def _radar_search(request: Request):
+        radar.start_account_search(request.path_params["run_id"], request.path_params["index"])
+
     async def radar_cover(request: Request):
         path = radar.cover_path(request.path_params["video_id"])
         return FileResponse(path) if path else _error("Sin portada.", 404)
@@ -560,6 +563,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Route("/api/radar/scan", _radar_action(_radar_scan), methods=["POST"]),
         Route("/api/radar/videos/{video_id}/analyze", _radar_action(_radar_analyze), methods=["POST"]),
         Route("/api/radar/niches", _radar_action(_radar_niches), methods=["POST"]),
+        Route("/api/radar/niches/{run_id}/{index:int}/accounts", _radar_action(_radar_search), methods=["POST"]),
         Route("/radar/cover/{video_id}.jpg", radar_cover),
         Route("/poster/{slug}.jpg", poster),
         Route("/cover/{slug}.jpg", cover),

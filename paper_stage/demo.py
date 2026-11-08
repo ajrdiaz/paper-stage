@@ -451,8 +451,18 @@ async def find_niches_demo(tema: str, context: list[dict]) -> tuple[list[dict], 
     return items, {proof}
 
 
+def demo_account_search(queries: list[str]) -> list[dict]:
+    import time
+
+    return [{"handle": "motor.curioso", "followers": 41000, "videos": 4, "views": 2300000, "best_views": 1800000,
+             "best_text": "Modo demostración: una cuenta encontrada al buscar en TikTok.", "latest": time.time() - 86400 * 2},
+            {"handle": "taller.en.casa", "followers": 8200, "videos": 2, "views": 310000, "best_views": 290000,
+             "best_text": "Modo demostración: otra cuenta de ejemplo.", "latest": time.time() - 86400 * 20}]
+
+
 def demo_radar_parts() -> dict:
-    return {"source": demo_radar_source, "analyzer": analyze_demo, "niche_finder": find_niches_demo, "demo": True}
+    return {"source": demo_radar_source, "analyzer": analyze_demo, "niche_finder": find_niches_demo,
+            "account_searcher": demo_account_search, "demo": True}
 
 
 def demo_publisher_parts(data_dir: Path) -> dict:

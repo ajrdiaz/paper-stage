@@ -1497,7 +1497,7 @@ async function renderRadar(params) {
         <input type="text" id="new-handle" class="radar-input" value="${esc(adding)}" autocomplete="off" aria-label="Cuenta de TikTok" placeholder="Pega el enlace del perfil o escribe @usuario">
         <button class="btn primary">Añadir</button>
       </form>
-      <p class="small muted">${data.config.source === "apify" ? `Cada actualización lee hasta ${data.config.results_per_account} videos por cuenta: unos $${cost.toFixed(2)} con estas cuentas. El plan gratis trae $5 al mes.` : esc(RADAR_SOURCE[data.config.source])}</p>
+      <p class="small muted">${data.config.source === "apify" ? `Cada actualización lee hasta ${data.config.results_per_account} videos por cuenta: unos $${cost.toFixed(2)} con estas cuentas, de los $5 al mes del plan gratis.` : esc(RADAR_SOURCE[data.config.source])}</p>
       ${data.accounts.length ? `<div class="radar-table-wrap"><table class="files radar-table"><thead><tr><th>Cuenta</th><th>Seguidores</th><th>Videos en ${data.config.window_days} días</th><th>Al día</th><th>Mediana</th><th>Mejor</th><th>Virales</th><th></th></tr></thead><tbody>
         ${data.accounts.map(a => `<tr>
           <td><a href="${esc(a.url)}" target="_blank" rel="noopener">@${esc(a.handle)}</a>
@@ -1522,7 +1522,17 @@ async function renderRadar(params) {
       <div class="radar-patterns">${radarCounts("Temas", p.temas)}${radarCounts("Tipos de gancho", p.ganchos)}${radarCounts("Estilos", p.estilos)}</div>`;
   };
 
-  const nicheCard = (n, known) => `
+  const foundAccounts = n => (n.encontradas || []).length ? `
+    <div class="stack radar-found"><strong class="small">Cuentas encontradas en TikTok</strong>
+      ${n.encontradas.map(a => `<div class="row small">
+        <a href="https://www.tiktok.com/@${esc(a.handle)}" target="_blank" rel="noopener">@${esc(a.handle)}</a>
+        <span class="muted">${fmtCount(a.followers)} seguidores · mejor video ${fmtCount(a.best_views)} · último ${fmtDay(a.latest)}</span>
+        <span class="spacer"></span>
+        ${data.accounts.some(x => x.handle === a.handle) ? `<span class="pill plain done">En el Radar</span>`
+          : `<button type="button" class="btn small" data-watch="${esc(a.handle)}">Añadir y leer</button>`}
+      </div>`).join("")}</div>` : "";
+
+  const nicheCard = (n, known, run, index) => `
     <article class="card stack radar-niche">
       <div class="row"><h3>${esc(n.nicho)}</h3><span class="spacer"></span><span class="pill plain ${n.puntaje >= 7 ? "done" : ""}">${esc(n.puntaje)}/10</span></div>
       ${n.por_que ? `<p>${esc(n.por_que)}</p>` : ""}
@@ -1535,6 +1545,10 @@ async function renderRadar(params) {
         return `<a href="https://www.tiktok.com/@${esc(h)}" target="_blank" rel="noopener">@${esc(h)}</a>${account?.last_scan_at && !account.last_error ? ` <span class="muted">(mediana ${fmtCount(account.median_views)})</span>` : ""}`;
       }).join(" · ")}
         ${n.cuentas.some(h => !known.has(h)) ? `<button type="button" class="btn small" data-watch="${esc(n.cuentas.join(","))}">Añadir al Radar y leerlas</button>` : ""}</div>` : ""}
+      ${foundAccounts(n)}
+      ${n.busqueda_error ? `<p class="small" style="color:var(--warn)" role="alert">${esc(n.busqueda_error)}</p>` : ""}
+      ${data.config.can_search ? `<div class="row"><button type="button" class="btn small" data-search="${esc(run.id)}:${index}" ${n.buscando ? "disabled" : ""}>${n.buscando ? "Buscando cuentas…" : (n.encontradas || []).length ? "Buscar otra vez" : "Buscar cuentas en TikTok"}</button>
+        <span class="small muted">Unos $${(data.config.search_results * data.config.cost_per_1000 / 1000 * Math.max(1, (n.busquedas || []).length)).toFixed(2)} en Apify</span></div>` : ""}
     </article>`;
 
   const nichesTab = () => {
@@ -1545,12 +1559,12 @@ async function renderRadar(params) {
         <input type="text" id="niche-tema" class="radar-input" maxlength="120" value="${esc(nicheTema)}" autocomplete="off" aria-label="Tema (opcional)" placeholder="Tema opcional: coches, cocina, dinero…">
         <button class="btn primary" ${running ? "disabled" : ""}>${running ? "Buscando…" : "Buscar nichos"}</button>
       </form>
-      <p class="small muted">Claude busca en la web y usa los virales del Radar como pista. Cada prueba lleva su enlace; sin ninguno, el puntaje no pasa de 6. Las cuentas que propone aún no están comprobadas: al añadirlas se leen y ves sus cifras reales.</p>
+      <p class="small muted">Claude busca en la web y usa los virales del Radar como pista. Cada prueba lleva su enlace; sin ninguno, el puntaje no pasa de 6. Para ver cuentas reales de un nicho, usa «Buscar cuentas en TikTok»; al añadir una, se lee y ves sus cifras.</p>
       ${data.niche_runs.length ? data.niche_runs.map((r, i) => {
         const title = `${r.tema ? esc(r.tema) : "Todos los temas"} · ${fmtDate(r.created_at)}`;
         const body = r.status === "running" ? `<p class="small muted loading"><span class="spinner" aria-hidden="true"></span>Investigando; puede tardar unos minutos…</p>`
           : r.status === "failed" ? `<p class="small" style="color:var(--warn)" role="alert">${esc(r.error)}</p>`
-          : `<div class="stack">${r.nichos.map(n => nicheCard(n, known)).join("")}</div>`;
+          : `<div class="stack">${r.nichos.map((n, k) => nicheCard(n, known, r, k)).join("")}</div>`;
         return `<details class="radar-run" ${i === 0 ? "open" : ""}><summary><strong>${title}</strong></summary>${body}</details>`;
       }).join("") : `<div class="card empty"><span class="big">Aún no hay búsquedas</span>Déjalo vacío para ver todo, o escribe un tema.</div>`}`;
   };
@@ -1596,6 +1610,12 @@ async function renderRadar(params) {
       await act(`/api/radar/accounts/${encodeURIComponent(remove.dataset.remove)}`, { method: "DELETE" });
       return;
     }
+    const search = ev.target.closest("[data-search]");
+    if (search) {
+      const [run, index] = search.dataset.search.split(":");
+      await act(`/api/radar/niches/${encodeURIComponent(run)}/${index}/accounts`, { method: "POST" });
+      return;
+    }
     const watch = ev.target.closest("[data-watch]");
     if (watch) {
       const handles = watch.dataset.watch.split(",");
@@ -1631,7 +1651,7 @@ async function renderRadar(params) {
 
   draw();
   poll(async () => {
-    const busy = data.scanning || data.videos.some(v => v.analyzing) || data.niche_runs.some(r => r.status === "running");
+    const busy = data.scanning || data.searching || data.videos.some(v => v.analyzing) || data.niche_runs.some(r => r.status === "running");
     if (!busy) return;
     data = await api("/api/radar");
     // No repintar mientras se escribe en un campo del Radar.

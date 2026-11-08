@@ -22,7 +22,7 @@ os.environ["PAPER_STAGE_DEMO_DELAY"] = "0.01"
 from starlette.testclient import TestClient  # noqa: E402
 
 from paper_stage import core, library  # noqa: E402
-from paper_stage.demo import analyze_demo, demo_radar_source, find_niches_demo, run_demo  # noqa: E402
+from paper_stage.demo import analyze_demo, demo_account_search, demo_radar_source, find_niches_demo, run_demo  # noqa: E402
 from paper_stage.jobs import JobManager  # noqa: E402
 from paper_stage import publishing, radar  # noqa: E402
 
@@ -651,8 +651,14 @@ class RadarUnitTests(unittest.TestCase):
         self.assertIsNone(ranked["1"]["velocity"])
         self.assertIsNone(ranked["6"]["multiple"])    # con un solo video no hay mediana
         self.assertFalse(ranked["6"]["viral"])
-        self.assertEqual(ranked["9"]["multiple"], 3.4)  # 3× o más, pero pocas vistas: no es viral
+        self.assertEqual(ranked["9"]["multiple"], 3.4)  # pocas veces sobre su mediana y pocas vistas: no es viral
         self.assertFalse(ranked["9"]["viral"])
+        big = radar.rank_videos([radar_row("d", str(i), 300_000) for i in range(1, 4)]
+                                + [radar_row("d", "4", 2_000_000), radar_row("e", "5", 1_000), radar_row("e", "6", 1_000),
+                                   radar_row("e", "7", 1_000), radar_row("e", "8", 200_000)], {}, now)
+        verdicts = {v["id"]: v["viral"] for v in big}
+        self.assertFalse(verdicts["4"])  # muchas vistas, pero solo 6,7× su mediana
+        self.assertFalse(verdicts["8"])  # 200× su mediana, pero menos de 250K
         self.assertEqual(radar.rank_videos(rows, {}, now)[0]["id"], "5")  # los virales, primero
         stats = radar.account_stats([v for v in ranked.values() if v["handle"] == "a"])
         self.assertEqual((stats["window_videos"], stats["median_views"], stats["viral_videos"]), (5, 250, 2))
@@ -716,6 +722,16 @@ class RadarUnitTests(unittest.TestCase):
             self.assertTrue(dest.exists())
         self.assertNotIn("Authorization", seen["headers"])
 
+    def test_authors_from_search(self):
+        def item(video_id, name, views):
+            return {"id": video_id, "playCount": views, "text": f"v{views}", "authorMeta": {"name": name, "fans": 5}}
+
+        authors = radar.authors_from([item("100001", "Una", 10), item("100002", "una", 500), item("100003", "otra", 400),
+                                      item("100004", "no vale!", 9999), {"error": "fila sin id"}])
+        self.assertEqual([a["handle"] for a in authors], ["una", "otra"])
+        self.assertEqual((authors[0]["videos"], authors[0]["views"], authors[0]["best_views"], authors[0]["best_text"]),
+                         (2, 510, 500, "v500"))
+
     @unittest.skipUnless(shutil.which("ffmpeg"), "hace falta ffmpeg")
     def test_video_frames(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -730,7 +746,8 @@ class RadarUnitTests(unittest.TestCase):
 class RadarApiTests(unittest.TestCase):
     def client(self, data, **parts):
         manager = JobManager(TMP / data, runner=run_demo)
-        parts = {"source": demo_radar_source, "analyzer": analyze_demo, "niche_finder": find_niches_demo, **parts}
+        parts = {"source": demo_radar_source, "analyzer": analyze_demo, "niche_finder": find_niches_demo,
+                 "account_searcher": demo_account_search, **parts}
         box = radar.Radar(manager.store.db, manager.data_dir, **parts)
         return TestClient(create_app(manager, token="", radar=box), base_url="http://127.0.0.1")
 
@@ -810,6 +827,26 @@ class RadarApiTests(unittest.TestCase):
             scores = {n["nicho"]: n["puntaje"] for n in run["nichos"]}
             self.assertEqual(scores["La ciencia de lo que comes cada día"], 6)  # sin enlace, baja
             self.assertEqual(run["nichos"][0]["puntaje"], 9)
+            # Las cuentas reales de un nicho, solo si se piden.
+            self.assertNotIn("encontradas", run["nichos"][0])
+            self.assertEqual(client.post(f"/api/radar/niches/{run['id']}/99/accounts").status_code, 404)
+            self.assertEqual(client.post("/api/radar/niches/nada/0/accounts").status_code, 404)
+            self.assertEqual(client.post(f"/api/radar/niches/{run['id']}/0/accounts").status_code, 200)
+            state = self.wait(client, lambda s: not s["searching"])
+            found = state["niche_runs"][0]["nichos"][0]
+            self.assertEqual(found["encontradas"][0]["handle"], "motor.curioso")
+            self.assertIsNone(found["busqueda_error"])
+
+    def test_account_search_needs_a_source(self):
+        manager = JobManager(TMP / "data-radar-nokey", runner=run_demo)
+        box = radar.Radar(manager.store.db, manager.data_dir, niche_finder=find_niches_demo)
+        with TestClient(create_app(manager, token="", radar=box), base_url="http://127.0.0.1") as client:
+            self.assertFalse(client.get("/api/radar").json()["config"]["can_search"])
+            client.post("/api/radar/niches", json={})
+            run = self.wait(client, lambda s: s["niche_runs"][0]["status"] != "running")["niche_runs"][0]
+            res = client.post(f"/api/radar/niches/{run['id']}/0/accounts")
+            self.assertEqual(res.status_code, 409)
+            self.assertIn("clave de Apify", res.json()["error"])
 
     def test_apify_key_never_reaches_the_browser(self):
         manager = JobManager(TMP / "data-radar-key", runner=run_demo)
