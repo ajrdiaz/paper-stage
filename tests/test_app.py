@@ -150,7 +150,31 @@ class CoreTests(unittest.TestCase):
 class AppTests(unittest.TestCase):
     def make_client(self, runner=run_demo, token=None, data="data"):
         manager = JobManager(TMP / data, runner=runner)
-        return TestClient(create_app(manager, token=token or ""))
+        return TestClient(create_app(manager, token=token or ""), base_url="http://127.0.0.1")
+
+    def test_other_sites_cannot_use_the_app(self):
+        preview = {"tema": "Los volcanes"}
+        with self.make_client(data="data-guard") as client:
+            evil = {"Origin": "https://evil.example"}
+            self.assertEqual(client.post("/api/jobs", json=preview, headers=evil).status_code, 403)
+            # Un POST text/plain no pasa por el preflight de CORS.
+            self.assertEqual(client.post("/api/jobs", content=json.dumps(preview), headers={
+                **evil, "Content-Type": "text/plain"}).status_code, 403)
+            self.assertEqual(client.post("/api/jobs", json=preview, headers={"Origin": "null"}).status_code, 403)
+            self.assertEqual(client.get("/api/jobs").json(), [])
+            self.assertEqual(client.get("/api/config", headers={"Host": "evil.example"}).status_code, 403)
+            # La propia interfaz sigue funcionando.
+            res = client.post("/api/prompt-preview", json=preview, headers={"Origin": "http://127.0.0.1"})
+            self.assertEqual(res.status_code, 200, res.text)
+            self.assertEqual(client.get("/api/config", headers={"Host": "localhost:8000"}).status_code, 200)
+            self.assertEqual(client.get("/api/config", headers={"Host": "[::1]:8000"}).status_code, 200)
+        # Expuesta en la red, el Host puede ser cualquiera: la protege el token.
+        with self.make_client(token="secreto", data="data-guard") as client:
+            res = client.get("/api/config", headers={"Host": "192.168.1.5:8000", "Authorization": "Bearer secreto"})
+            self.assertEqual(res.status_code, 200)
+
+    def test_check_env_reports_the_browser(self):
+        self.assertIn("chromium", {i["name"] for i in core.check_env()["items"]})
 
     def test_full_demo_job(self):
         with self.make_client() as client:

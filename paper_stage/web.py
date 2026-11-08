@@ -10,6 +10,7 @@ import os
 from dataclasses import fields
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -24,6 +25,7 @@ from .jobs import TERMINAL, JobManager
 from .publishing import TEST_SLUG, PublishError, PublishRequest, Publisher, default_text, text_units
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def _error(message: str, status: int = 400) -> JSONResponse:
@@ -60,6 +62,25 @@ async def _json(request: Request) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Se esperaba un objeto JSON.")
     return payload
+
+
+class SameOriginGuard(BaseHTTPMiddleware):
+    """Crear un trabajo lanza un agente con Bash: una web ajena abierta en este equipo no debe
+    poder hacerlo. Sin token solo vale un Host local (DNS rebinding), y ninguna escritura
+    entre sitios se acepta (un POST text/plain no pasa por el preflight de CORS)."""
+
+    def __init__(self, app, local_only: bool):
+        super().__init__(app)
+        self.local_only = local_only
+
+    async def dispatch(self, request: Request, call_next):
+        if self.local_only and request.url.hostname not in LOCAL_HOSTS:
+            return Response("Host no permitido.", status_code=403)
+        origin = request.headers.get("origin")
+        if origin and request.method not in ("GET", "HEAD") \
+                and urlsplit(origin).netloc != request.headers.get("host"):
+            return Response("Origen no permitido.", status_code=403)
+        return await call_next(request)
 
 
 class TokenAuth(BaseHTTPMiddleware):
@@ -489,7 +510,9 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Mount("/fonts", StaticFiles(directory=core.FONTS_DIR, check_dir=False), name="fonts"),
     ]
     token = token if token is not None else os.environ.get("PAPER_STAGE_TOKEN")
-    middleware = [Middleware(TokenAuth, token=token)] if token else []
+    middleware = [Middleware(SameOriginGuard, local_only=not token)]
+    if token:
+        middleware.append(Middleware(TokenAuth, token=token))
     app = Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
     app.state.manager = manager
     app.state.publisher = publisher

@@ -465,11 +465,24 @@ MODULES = {
 }
 
 
+def _chromium_installed() -> bool:
+    """El módulo playwright no trae el navegador: sin él, el render falla al final del pipeline."""
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            return Path(p.chromium.executable_path).exists()
+    except Exception:  # noqa: BLE001 — sin playwright o sin su driver, no hay navegador
+        return False
+
+
 def check_env() -> dict:
     items = []
     for name, (why, optional) in BINARIES.items():
         items.append({"kind": "bin", "name": name, "why": why, "optional": optional,
                       "ok": shutil.which(name) is not None})
+    items.append({"kind": "bin", "name": "chromium", "why": "render de stage.html (playwright install chromium)",
+                  "optional": False, "ok": _chromium_installed()})
     for name, (why, optional) in MODULES.items():
         items.append({"kind": "module", "name": name, "why": why, "optional": optional,
                       "ok": importlib.util.find_spec(name) is not None})
