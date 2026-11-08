@@ -37,8 +37,8 @@ CREATE TABLE IF NOT EXISTS jobs (
 """
 
 
-CHARACTERS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS characters (
+SERIES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS series (
     id TEXT PRIMARY KEY,
     data TEXT NOT NULL,
     created_at REAL NOT NULL,
@@ -47,62 +47,62 @@ CREATE TABLE IF NOT EXISTS characters (
 """
 
 
-class CharacterStore:
-    """Personajes, en la misma base de datos que los trabajos. Si no hay ninguno, crea a
-    Lía: el estudio siempre tiene al menos un personaje con el que producir."""
+class SerieStore:
+    """Series, en la misma base de datos que los trabajos. Si no hay ninguna, crea la de
+    partida: el estudio siempre tiene al menos una con la que producir."""
 
     def __init__(self, db: sqlite3.Connection):
         self.db = db
-        self.db.execute(CHARACTERS_SCHEMA)
-        if not self.db.execute("SELECT 1 FROM characters LIMIT 1").fetchone():
-            self._save(core.Character.from_dict(core.LIA.to_dict()), insert=True)
+        self.db.execute(SERIES_SCHEMA)
+        if not self.db.execute("SELECT 1 FROM series LIMIT 1").fetchone():
+            self._save(core.Serie.from_dict(core.DEFAULT_SERIE.to_dict()), insert=True)
         self.db.commit()
 
-    def list(self) -> list[core.Character]:
-        rows = self.db.execute("SELECT data FROM characters ORDER BY created_at")
-        return [core.Character.from_dict(json.loads(data)) for (data,) in rows]
+    def list(self) -> list[core.Serie]:
+        rows = self.db.execute("SELECT data FROM series ORDER BY created_at")
+        return [core.Serie.from_dict(json.loads(data)) for (data,) in rows]
 
-    def get(self, character_id: str) -> core.Character | None:
-        row = self.db.execute("SELECT data FROM characters WHERE id = ?", [character_id]).fetchone()
-        return core.Character.from_dict(json.loads(row[0])) if row else None
+    def get(self, serie_id: str) -> core.Serie | None:
+        row = self.db.execute("SELECT data FROM series WHERE id = ?", [serie_id]).fetchone()
+        return core.Serie.from_dict(json.loads(row[0])) if row else None
 
-    def create(self, character: core.Character) -> core.Character:
-        character.validate()
+    def create(self, serie: core.Serie) -> core.Serie:
+        serie.validate()
         taken = {c.id for c in self.list()}
-        base = core.slugify(character.nombre)[:40].strip("-") or "personaje"
-        character.id, n = base, 2
-        while character.id in taken:
-            character.id, n = f"{base}-{n}", n + 1
-        self._save(character, insert=True)
+        base = core.slugify(serie.nombre)[:40].strip("-") or "serie"
+        serie.id, n = base, 2
+        while serie.id in taken:
+            serie.id, n = f"{base}-{n}", n + 1
+        self._save(serie, insert=True)
         self.db.commit()
-        return character
+        return serie
 
-    def update(self, character_id: str, character: core.Character) -> core.Character:
-        if not self.get(character_id):
-            raise KeyError(character_id)
-        character.id = character_id
-        character.validate()
-        self._save(character, insert=False)
+    def update(self, serie_id: str, serie: core.Serie) -> core.Serie:
+        if not self.get(serie_id):
+            raise KeyError(serie_id)
+        serie.id = serie_id
+        serie.validate()
+        self._save(serie, insert=False)
         self.db.commit()
-        return character
+        return serie
 
-    def delete(self, character_id: str) -> None:
-        self.db.execute("DELETE FROM characters WHERE id = ?", [character_id])
+    def delete(self, serie_id: str) -> None:
+        self.db.execute("DELETE FROM series WHERE id = ?", [serie_id])
         self.db.commit()
 
-    def _save(self, character: core.Character, insert: bool) -> None:
-        data, now = json.dumps(character.to_dict(), ensure_ascii=False), time.time()
+    def _save(self, serie: core.Serie, insert: bool) -> None:
+        data, now = json.dumps(serie.to_dict(), ensure_ascii=False), time.time()
         if insert:
-            self.db.execute("INSERT INTO characters (id, data, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                            [character.id, data, now, now])
+            self.db.execute("INSERT INTO series (id, data, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                            [serie.id, data, now, now])
         else:
-            self.db.execute("UPDATE characters SET data = ?, updated_at = ? WHERE id = ?",
-                            [data, now, character.id])
+            self.db.execute("UPDATE series SET data = ?, updated_at = ? WHERE id = ?",
+                            [data, now, serie.id])
 
 
-def request_character(req: dict) -> str:
-    """ID del personaje de una petición guardada (las anteriores a los personajes son de Lía)."""
-    return (req.get("personaje") or {}).get("id") or core.LIA.id
+def request_serie(req: dict) -> str:
+    """ID de la serie de una petición guardada."""
+    return (req.get("serie") or {}).get("id") or core.DEFAULT_SERIE.id
 
 
 class JobStore:
@@ -162,7 +162,7 @@ class JobManager:
         self.events_dir = data_dir / "jobs"
         self.events_dir.mkdir(parents=True, exist_ok=True)
         self.store = JobStore(data_dir / "paper_stage.db")
-        self.characters = CharacterStore(self.store.db)
+        self.series = SerieStore(self.store.db)
         self.runner = runner or core.run_agent
         self.concurrency = max(1, concurrency)
         self.queue: asyncio.Queue[str] = asyncio.Queue()
@@ -171,6 +171,8 @@ class JobManager:
         self.cancel_requested: set[str] = set()
         self.subscribers: dict[str, set[asyncio.Queue]] = {}
         self.seq: dict[str, int] = {}
+        # Transcripciones de los videos que inspiraron un guion (las pone la web, desde el Radar).
+        self.source_texts: Callable[[list[str]], list[str]] = lambda ids: []
         self.loop: asyncio.AbstractEventLoop | None = None
         self.stopping = False
 
@@ -199,51 +201,50 @@ class JobManager:
 
     # ------------------------------------------------------------------ API pública
 
-    # Los temas no se repiten dentro de la serie de un personaje; otro personaje, con su
-    # propio nicho y su propio canal, sí puede tratar el mismo tema.
+    # Los temas no se repiten dentro de una serie; otra, con su propio nicho, sí puede tratar el mismo.
 
-    def used_topics(self, idioma: str | None = None, personaje: str | None = None) -> list[str]:
+    def used_topics(self, idioma: str | None = None, serie: str | None = None) -> list[str]:
         """Temas ya producidos o en cola: los de los trabajos y los de output/ hechos desde
         la terminal (de estos solo se conoce el título)."""
         topics, slugs = [], set()
         for slug, req in self.store.requests():
             slugs.add(slug)
             if (idioma is None or req.get("idioma") == idioma) and \
-                    (personaje is None or request_character(req) == personaje):
+                    (serie is None or request_serie(req) == serie):
                 topics.append(req["tema"])
         for video in library.list_videos():
             if video["slug"] not in slugs and (idioma is None or video.get("idioma") in (None, idioma)) \
-                    and (personaje is None or video["personaje"] == personaje):
+                    and (serie is None or video["serie"] == serie):
                 topics.append(video["title"])
         return list(dict.fromkeys(topics))
 
-    def is_used(self, tema: str, idioma: str, personaje: str = core.LIA.id) -> bool:
+    def is_used(self, tema: str, idioma: str, serie: str) -> bool:
         key = core.topic_key(tema, idioma)
         requests = self.store.requests()
         if any(core.topic_key(req["tema"], req.get("idioma", "es")) == key
-               and request_character(req) == personaje for _, req in requests):
+               and request_serie(req) == serie for _, req in requests):
             return True
         # Hecho desde la terminal: su carpeta es el slug del tema.
         slug = core.slugify(f"{tema}-{idioma}")
         script = library.read_json(core.OUTPUT_DIR / slug / "script.json")
         return (slug not in {s for s, _ in requests} and isinstance(script, dict)
-                and library.script_character(script) == personaje)
+                and library.script_serie(script) == serie)
 
-    def prepare(self, req: core.VideoRequest, personaje: str | None = None) -> core.VideoRequest:
-        """Copia el personaje en la petición, busca sus videos anteriores y la valida."""
-        character = self.characters.get(personaje or core.LIA.id)
-        if not character:
-            raise ValueError(f"No existe el personaje «{personaje}».")
-        req.personaje = character.to_dict()
-        req.referencias = library.videos_of(character.id)
-        req.ganchos_previos = library.hooks_of(character.id)
+    def prepare(self, req: core.VideoRequest, serie: str | None = None) -> core.VideoRequest:
+        """Copia la serie en la petición (sin indicar, la primera), busca sus videos anteriores y la valida."""
+        serie = self.series.get(serie) if serie else self.series.list()[0]
+        if not serie:
+            raise ValueError(f"No existe la serie «{serie}».")
+        req.serie = serie.to_dict()
+        req.referencias = library.videos_of(serie.id)
+        req.ganchos_previos = library.hooks_of(serie.id)
         req.validate()
         return req
 
-    def create(self, req: core.VideoRequest, personaje: str | None = None) -> dict:
-        self.prepare(req, personaje)
-        if self.is_used(req.tema, req.idioma, req.character.id):
-            raise ValueError(f"{req.character.nombre} ya tiene un video sobre «{req.tema}» en este idioma. "
+    def create(self, req: core.VideoRequest, serie: str | None = None) -> dict:
+        self.prepare(req, serie)
+        if self.is_used(req.tema, req.idioma, req.ficha.id):
+            raise ValueError(f"«{req.ficha.nombre}» ya tiene un video sobre «{req.tema}» en este idioma. "
                              "Los temas no se repiten: elige uno distinto.")
         req.slug = self._unique_slug(req.slug)
         job_id = uuid.uuid4().hex[:10]
@@ -303,8 +304,8 @@ class JobManager:
     def active_slugs(self) -> set[str]:
         return {j["slug"] for j in self.store.by_status("queued", "running")}
 
-    def active_characters(self) -> set[str]:
-        return {request_character(j["request"]) for j in self.store.by_status("queued", "running")}
+    def active_series(self) -> set[str]:
+        return {request_serie(j["request"]) for j in self.store.by_status("queued", "running")}
 
     # ------------------------------------------------------------------ eventos
 
@@ -456,6 +457,8 @@ class JobManager:
         if result and result.get("ok") and has_video:
             await asyncio.to_thread(library.cover, req.out_dir)
             library.poster(req.out_dir)
+            # El agente ya terminó: el texto de terceros no pasa por sus manos.
+            library.write_similarity(req.out_dir, self.source_texts(req.inspiracion))
             check = await asyncio.to_thread(library.verify, req.out_dir)
             if check and not check["ok"]:
                 failed = [f"{c['label']} ({c['detail']})" for c in check["checks"] if not c["ok"]]

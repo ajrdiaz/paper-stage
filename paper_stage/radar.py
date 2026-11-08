@@ -1003,13 +1003,15 @@ class Radar:
 
     def _ideas_view(self, videos: list[dict]) -> list[dict]:
         by_id = {v["id"]: v for v in videos}
+        produced = {core.topic_key(t, IDEA_LANGUAGE) for t in self.used_topics(IDEA_LANGUAGE)}
         ideas = []
         for idea_id, data, created in self.db.execute("SELECT id, data, created_at FROM radar_ideas WHERE status = 'nueva' "
                                                       "ORDER BY created_at DESC").fetchall():
             idea = json.loads(data)
             idea["fuentes"] = [{k: by_id[s][k] for k in ("id", "url", "handle", "views", "multiple")}
                                for s in idea.get("fuentes", []) if s in by_id]
-            ideas.append({**idea, "id": idea_id, "created_at": created})
+            used = core.topic_key(idea["tema"], IDEA_LANGUAGE) in produced
+            ideas.append({**idea, "id": idea_id, "created_at": created, "usada": used})
         return ideas
 
     # ------------------------------------------------------------------ lectura
@@ -1063,6 +1065,16 @@ class Radar:
                                        for k, niche in enumerate(json.loads(n) if n else [])]}
                            for i, t, s, e, n, c in niche_rows],
         }
+
+    def transcripts(self, video_ids: list[str]) -> list[str]:
+        """Transcripciones guardadas de estos videos, para comparar un guion propio con ellas."""
+        texts = []
+        for video_id in video_ids:
+            row = self.db.execute("SELECT data FROM radar_analyses WHERE video_id = ?", [video_id]).fetchone()
+            text = json.loads(row[0]).get("transcripcion") if row else ""
+            if text:
+                texts.append(text)
+        return texts
 
     def cover_path(self, video_id: str) -> Path | None:
         if not VIDEO_ID_RE.match(video_id):

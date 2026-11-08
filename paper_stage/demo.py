@@ -19,7 +19,7 @@ import wave
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
-from .core import Character, VideoRequest, character_from_idea, topic_key
+from .core import Serie, VideoRequest, topic_key
 from .library import MAX_HOOK_WORDS
 
 SPEED = float(os.environ.get("PAPER_STAGE_DEMO_DELAY", "1.2"))
@@ -29,7 +29,7 @@ LINES = {
         "¿Sabías que {tema} esconde un secreto sorprendente?",
         "Imagínalo como algo que ves todos los días… y al final vas a ver lo más raro.",
         "Y aquí viene lo más raro: ¡nadie lo esperaba!",
-        "Dos pedacitos de papel nos lo van a explicar, paso a paso.",
+        "Vamos a verlo por dentro, paso a paso.",
         "¿Qué crees que pasa? ¡Dilo en voz alta!",
         "¡Exacto! Y ese era el secreto del principio.",
         "Ahora ya sabes algo nuevo. {cta}",
@@ -38,13 +38,13 @@ LINES = {
         "Did you know that {tema} hides an amazing secret?",
         "Picture something you see every day… and at the end you'll see the strangest part.",
         "And here comes the weirdest part: nobody expected it!",
-        "Two little paper friends will explain it, step by step.",
+        "Let's look inside, step by step.",
         "What do you think happens? Say it out loud!",
         "Exactly! And that was the secret from the start.",
         "Now you know something new. {cta}",
     ],
 }
-TITLES = ["La idea", "¿Qué es?", "El detalle clave", "El corazón", "Mini-quiz", "La revelación", "De vuelta"]
+TITLES = ["El gancho", "Lo que todos creen", "Qué pasa de verdad", "Por dentro", "El dato", "El giro", "El remate"]
 SCENE_LEN = [7, 9, 10, 11, 9, 10, 6.5]
 
 
@@ -128,15 +128,15 @@ def _mouth(words: list[dict], duration: float) -> list[float]:
 def _stage_html(req: VideoRequest, title: str, words: list[dict], mouth: list[float],
                 timeline: list[dict], duration: float) -> str:
     w, h = (1080, 1920) if req.formato == "vertical" else (1920, 1080)
-    pal = (req.character.paleta + ["#E9B949", "#E8736B", "#3FA796"])[:3]
+    pal = (req.ficha.paleta + ["#E9B949", "#E8736B", "#3FA796"])[:3]
     data = json.dumps({"words": words, "mouth": mouth, "timeline": timeline}, ensure_ascii=False)
     return f"""<!doctype html>
 <html lang="{req.idioma}"><head><meta charset="utf-8"><title>{title}</title>
 <style>
 html,body{{margin:0;background:#1E2A4F;overflow:hidden}}
 svg{{display:block}}
-#cap{{position:absolute;left:0;right:0;top:{int(h*0.79)}px;text-align:center;font:600 58px 'Fredoka',system-ui,sans-serif;color:#F3E9D2;padding:0 90px}}
-#cap b{{color:#E9B949;display:inline-block;transform:translateY(-6px)}}
+#subs{{position:absolute;left:0;right:0;top:{int(h*0.79)}px;text-align:center;font:600 58px 'Fredoka',system-ui,sans-serif;color:#F3E9D2;padding:0 90px}}
+#subs b{{color:#E9B949;display:inline-block;transform:translateY(-6px)}}
 </style></head><body>
 <svg id="s" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
  <defs><filter id="torn"><feTurbulence baseFrequency="0.04" numOctaves="2" seed="3"/><feDisplacementMap in="SourceGraphic" scale="6"/></filter></defs>
@@ -148,7 +148,7 @@ svg{{display:block}}
   <rect x="30" y="1060" width="940" height="160" fill="#8B5E3C"/>
   <path d="M30 30h170c-30 400 20 800-40 1190H30z" fill="{pal[1]}" stroke="#fff" stroke-width="4" filter="url(#torn)"/>
   <path d="M970 30H800c30 400-20 800 40 1190h130z" fill="{pal[1]}" stroke="#fff" stroke-width="4" filter="url(#torn)"/>
-  <g id="lia" transform="translate(500,760)">
+  <g id="figura" transform="translate(500,760)">
    <path d="M-120 300 q0-160 120-170 q120 10 120 170z" fill="{pal[2]}" stroke="#fff" stroke-width="4"/>
    <circle r="95" fill="#F3D5B5" stroke="#fff" stroke-width="4"/>
    <path d="M-105 10 q0-120 105-120 q105 0 105 120 l-20 0 q-10-70-85-80 q-75 10-85 80z" fill="#222"/>
@@ -160,7 +160,7 @@ svg{{display:block}}
   <text id="title" x="500" y="160" text-anchor="middle" font-family="Gaegu,'Patrick Hand',cursive" font-size="92" fill="#1E2A4F">{title}</text>
  </g>
 </svg>
-<div id="cap"></div>
+<div id="subs"></div>
 <script>
 const D={data};
 window.DURATION={duration};
@@ -173,15 +173,15 @@ window.renderAt=function(t){{
   const sun=document.getElementById('sun');
   sun.setAttribute('cx',500+Math.sin(tm*0.6)*220);
   sun.setAttribute('r',110+Math.sin(tm*1.3)*18+(r()-.5)*3);
-  document.getElementById('lia').setAttribute('transform',`translate(${{500+(r()-.5)*3}},${{760+Math.sin(tm*2)*6}})`);
+  document.getElementById('figura').setAttribute('transform',`translate(${{500+(r()-.5)*3}},${{760+Math.sin(tm*2)*6}})`);
   const m=D.mouth[Math.min(D.mouth.length-1,Math.floor(t*24))]||0;
   const mouth=document.getElementById('mouth');
   mouth.setAttribute('rx',10+m*8);mouth.setAttribute('ry',4+m*18);
   document.getElementById('title').style.opacity=t<7?1:0;
   const i=D.words.findIndex(w=>t>=w.start&&t<=w.end+0.25);
-  if(i<0){{document.getElementById('cap').innerHTML='';return}}
+  if(i<0){{document.getElementById('subs').innerHTML='';return}}
   const a=Math.max(0,i-4), b=Math.min(D.words.length,a+9);
-  document.getElementById('cap').innerHTML=D.words.slice(a,b).map((w,k)=>a+k===i?`<b>${{w.word}}</b>`:w.word).join(' ');
+  document.getElementById('subs').innerHTML=D.words.slice(a,b).map((w,k)=>a+k===i?`<b>${{w.word}}</b>`:w.word).join(' ');
 }};
 window.renderAt(0);
 </script></body></html>"""
@@ -201,7 +201,7 @@ async def run_demo(
     duration = timeline[-1]["end"]
     words = _words(lines, timeline)
     title = req.tema[:40]
-    character = req.character
+    ficha = req.ficha
 
     async def step(tool: str, detail: str, action: Callable[[], None] | None = None,
                    note: str | None = None) -> AsyncIterator[dict]:
@@ -216,18 +216,18 @@ async def run_demo(
     yield {"kind": "text", "text": "Modo demostración: no se llama a Claude y los datos son de ejemplo."}
 
     plan = [
-        ("WebSearch", f"{req.tema} datos para niños", lambda: _write(out / "research.md",
+        ("WebSearch", f"{req.tema} datos verificados", lambda: _write(out / "research.md",
             f"# Investigación: {req.tema}\n\n1. Dato de ejemplo (modo demo).\n   Fuente: —\n"),
          "Investigo el tema y elijo el dato más sorprendente como gancho."),
         ("Write", "bible.md", lambda: _write(out / "bible.md",
-            f"# Biblia visual\n\n## ESTILO\nRecortes de papel…\n\n## PERSONAJE PRINCIPAL\n"
-            f"{character.nombre}: {character.apariencia}\n\n## ESCENARIO\n{character.escenario}\n"), None),
+            f"# Biblia visual\n\n## ESTILO\n{ficha.nombre}: {ficha.estilo}\n\n## PRESENTADOR\n"
+            f"{ficha.presentador or 'Sin presentador.'}\n\n## TONO\n{ficha.tono}\n"), None),
         ("Write", "script.json", lambda: _write(out / "script.json", json.dumps({
-            "idioma": req.idioma, "formato": req.formato, "personaje": character.id, "titulo_crayon": title,
+            "idioma": req.idioma, "formato": req.formato, "serie": ficha.id, "titulo": title,
             "tipo_gancho": "pregunta imposible", "gancho": lines[0],
             "texto_gancho": " ".join(title.split()[:MAX_HOOK_WORDS]), "bucle_abierto": "lo más raro, al final",
             "escenas": [{"n": i + 1, "titulo": TITLES[i], "vo": line,
-                         "visual": "Escena de ejemplo", "transition": "El papel se dobla…"}
+                         "visual": "Escena de ejemplo", "transition": "La cámara entra en el objeto…"}
                         for i, line in enumerate(lines)],
         }, ensure_ascii=False, indent=2)), "Escribo el guion en 7 escenas."),
         ("Bash", "Generar la voz con Kokoro (escenas 1–7)", lambda: [
@@ -242,23 +242,22 @@ async def run_demo(
         ), None),
         ("Write", "stage.html", lambda: _write(out / "stage.html", _stage_html(
             req, title, words, _mouth(words, duration), timeline, duration)),
-         "Animo el teatrito en stage.html con reloj determinista."),
+         "Animo la explicación en stage.html con reloj determinista."),
         ("Bash", "Sintetizar música y efectos, mezclar a −14 LUFS",
          lambda: _music_box(out / "mix.wav", duration), None),
         ("Write", "qa_previo.md", lambda: _write(out / "qa_previo.md",
-            "# QA previo (demo)\n\n- [x] Escenas entre 60.0 y 65.0 s\n- [x] Subtítulos debajo del escenario\n"
+            "# QA previo (demo)\n\n- [x] Escenas entre 61.0 y 70.0 s\n- [x] Subtítulos debajo del escenario\n"
             "- [ ] Voz real (el modo demo usa silencio)\n"), None),
         ("Bash", "Render con Playwright + ffmpeg → final.mp4", lambda: _fake_mp4(out, duration, req), None),
         ("Write", "publish.json", lambda: _write(out / "publish.json", json.dumps({
             "idioma": req.idioma,
             "titulos": [f"¿Qué esconde {req.tema}?", f"{req.tema} en 60 segundos",
-                        f"{character.nombre} te lo explica"[:60]],
+                        f"{ficha.nombre} te lo explica"[:60]],
             "descripcion_corta": "Video de ejemplo del modo demostración.",
             "descripcion": "Video de ejemplo generado en modo demostración.",
-            "hashtags": ["#shorts", "#paraniños", "#aprendejugando", "#curiosidades", character.hashtag],
-            "texto_portada": title, "frame_portada_s": 1.5, "hecho_para_ninos": True,
-            "serie": character.serie, "personaje": character.id,
-            "ideas_siguientes": ["Los volcanes", "Por qué el cielo es azul", "Cómo duermen los delfines"],
+            "hashtags": ["#shorts", "#ciencia", "#sabiasque", "#curiosidades", ficha.hashtag],
+            "texto_portada": title, "frame_portada_s": 1.5, "color_acento": "#FF8A3D", "serie": ficha.id,
+            "ideas_siguientes": ["Por qué te da hipo", "Por qué se duerme una pierna", "Por qué bostezamos"],
         }, ensure_ascii=False, indent=2)), None),
         ("Write", "qa.md", lambda: _write(out / "qa.md",
             "# QA final (demo)\n\n- [x] final.mp4 existe\n- [ ] Duración real (el modo demo hace un video corto)\n"), None),
@@ -294,90 +293,32 @@ def _fake_mp4(out: Path, duration: float, req: VideoRequest) -> None:
 
 IDEAS = {
     "es": [
-        ("¿Por qué el mar es salado?", "Lía prueba el mar y pone cara de limón."),
-        ("¿Cómo respiran los peces?", "Un pez de papel le enseña sus branquias secretas."),
-        ("¿Por qué la Luna cambia de forma?", "La Luna juega al escondite con el Sol."),
-        ("¿De dónde sale el viento?", "Un globo se escapa y Lía lo persigue."),
-        ("¿Por qué los gatos ronronean?", "Un gato de papel con motor de juguete."),
-        ("¿Cómo se forma el arcoíris?", "Una gota de agua abre la caja de colores del sol."),
-        ("¿Por qué tenemos hipo?", "Lía no puede parar de saltar… ¡hip!"),
-        ("¿Cómo vuelan los aviones?", "Un avión de papel que no quiere caerse."),
+        ("¿Por qué te da hipo sin motivo?", "Algo que tu diafragma hace sin avisar."),
+        ("¿Por qué se te duerme una pierna?", "Ese hormigueo es tu cuerpo protestando."),
+        ("¿Por qué te ruge el estómago?", "No es hambre: es limpieza."),
+        ("¿Por qué lloras al cortar cebolla?", "La cebolla se defiende de ti."),
+        ("¿Por qué bostezas cuando otro bosteza?", "Tu cerebro copia sin pedirte permiso."),
+        ("¿Por qué ves puntitos al levantarte?", "Tu sangre llega tarde."),
+        ("¿Por qué se te arrugan los dedos en el agua?", "Tu cuerpo lo hace a propósito."),
+        ("¿Por qué te da escalofrío sin frío?", "Una orden que no diste tú."),
     ],
     "en": [
-        ("Why is the sea salty?", "Lía tastes the sea and makes a lemon face."),
-        ("How do fish breathe?", "A paper fish shows its secret gills."),
-        ("Why does the Moon change shape?", "The Moon plays hide-and-seek with the Sun."),
-        ("Where does wind come from?", "A balloon escapes and Lía chases it."),
-        ("Why do cats purr?", "A paper cat with a toy engine inside."),
-        ("How does a rainbow form?", "A raindrop opens the Sun's box of colors."),
+        ("Why do you get hiccups?", "Your diaphragm does it without warning."),
+        ("Why does your leg fall asleep?", "That tingling is your body protesting."),
+        ("Why does your stomach growl?", "It isn't hunger: it's cleaning."),
+        ("Why do onions make you cry?", "The onion defends itself from you."),
+        ("Why do yawns spread?", "Your brain copies without asking."),
+        ("Why do you see spots when you stand up?", "Your blood arrives late."),
     ],
 }
 
 
-async def suggest_demo(character: Character, idioma: str, edad: str, pista: str,
-                       used: list[str], n: int) -> list[dict]:
+async def suggest_demo(serie: Serie, idioma: str, pista: str, used: list[str], n: int) -> list[dict]:
     """Sugerencias fijas para el modo demo: sin Claude y sin costo."""
     await asyncio.sleep(min(SPEED, 0.6))
     taken = {topic_key(t, idioma) for t in used}
     fresh = [(t, g) for t, g in IDEAS[idioma] if topic_key(t, idioma) not in taken]
     return [{"tema": t, "gancho": g} for t, g in fresh[:n]]
-
-
-CHARACTER_IDEAS = [
-    {"nombre": "Coral", "nicho": {"es": "Animales del océano profundo", "en": "Deep-sea animals"},
-     "gancho": "Una pulpita exploradora que enciende su linterna en la oscuridad del mar.",
-     "apariencia": "Una pulpita de papel lila con ocho tentáculos cortos y redondeados, ojos grandes de punto, "
-                   "boca pequeña en \"o\", casco de buzo de papel celofán y una linterna amarilla en un tentáculo.",
-     "personalidad": "Valiente y curiosa, habla en susurros emocionados cuando descubre algo nuevo.",
-     "escenario": "Un submarino de papel con ojo de buey redondo, remaches dibujados en crayón y burbujas colgadas de hilos.",
-     "paleta": ["#2B4C7E", "#6FB7B7", "#B58BD6", "#F3E9D2", "#12213D"], "voz": "femenina",
-     "voz_estilo": "juvenil, curiosa y un poco susurrada",
-     "serie": {"es": "Coral bajo el mar", "en": "Coral Under the Sea"},
-     "cta_es": "¡Sígueme para bucear más hondo!", "cta_en": "Follow me to dive deeper!"},
-    {"nombre": "Tito", "nicho": {"es": "Cómo funcionan las cosas de la cocina", "en": "How kitchen things work"},
-     "gancho": "Un tomate chef que descubre la ciencia escondida en cada receta.",
-     "apariencia": "Un tomate rojo de papel con gorro de chef blanco, bigote de crayón negro, ojos de punto, "
-                   "boca redonda y una cuchara de madera con la que señala.",
-     "personalidad": "Alegre y teatral, exagera cada descubrimiento como si fuera un gran truco de magia.",
-     "escenario": "Una cocina de papel con azulejos cuadriculados, una estufa de cartón y frascos con etiquetas de crayón.",
-     "paleta": ["#E0503C", "#F2C14E", "#7FB069", "#FFF4E0", "#3B2A20"], "voz": "masculina",
-     "voz_estilo": "animada y teatral, como un presentador de circo amable",
-     "serie": {"es": "La cocina de Tito", "en": "Tito's Kitchen"},
-     "cta_es": "¡Sígueme para cocinar más ciencia!", "cta_en": "Follow me to cook up more science!"},
-    {"nombre": "Nube", "nicho": {"es": "El clima y el tiempo", "en": "Weather and climate"},
-     "gancho": "Una nubecita que cambia de forma según el tiempo que explica.",
-     "apariencia": "Una nube de papel blanco esponjosa con mejillas rosadas, ojos de punto, boca pequeña en \"o\", "
-                   "botas de lluvia amarillas y un paraguas azul con el que señala.",
-     "personalidad": "Tranquila y soñadora, habla despacio y cuenta todo como una historia de cuna.",
-     "escenario": "Una ventana de papel con cortinas azules que da a un paisaje de colinas y un cielo que cambia de color.",
-     "paleta": ["#8EC5E8", "#F6D55C", "#F28DA6", "#FAFAF5", "#27365A"], "voz": "femenina",
-     "voz_estilo": "suave, tranquila y soñadora",
-     "serie": {"es": "Pregúntale a Nube", "en": "Ask Nube"},
-     "cta_es": "¡Sígueme para mirar el cielo conmigo!", "cta_en": "Follow me to watch the sky with me!"},
-    {"nombre": "Rex", "nicho": {"es": "Dinosaurios y fósiles", "en": "Dinosaurs and fossils"},
-     "gancho": "Un pequeño dinosaurio paleontólogo que desentierra huesos de sus primos.",
-     "apariencia": "Un dinosaurio verde de papel, bajito y redondo, con sombrero de explorador, lentes redondos, "
-                   "ojos de punto, boca grande y un pincel de excavar con el que señala.",
-     "personalidad": "Entusiasta y un poco torpe, se emociona tanto que tropieza con sus propias patas.",
-     "escenario": "Una excavación de papel kraft con capas de tierra de colores, una carpa a rayas y huesos asomando.",
-     "paleta": ["#6BAA75", "#D9A441", "#C1666B", "#F4EBD9", "#2E2B26"], "voz": "masculina",
-     "voz_estilo": "entusiasta y rápida, con risas pequeñas",
-     "serie": {"es": "Rex desentierra", "en": "Rex Digs Up"},
-     "cta_es": "¡Sígueme para desenterrar más!", "cta_en": "Follow me to dig up more!"},
-]
-
-
-async def suggest_characters_demo(idioma: str, edad: str, pista: str, avoid: list[str], n: int) -> list[dict]:
-    """Ideas de personaje fijas para el modo demo: sin Claude y sin costo."""
-    await asyncio.sleep(min(SPEED, 0.6))
-    taken = {topic_key(a.split(" (")[0], "") for a in avoid}
-    ideas = []
-    for idea in CHARACTER_IDEAS:
-        if topic_key(idea["nombre"], "") in taken:
-            continue
-        data = {**idea, "nicho": idea["nicho"][idioma], "serie": idea["serie"][idioma]}
-        ideas.append({"gancho": idea["gancho"], "personaje": character_from_idea(data, idioma, edad).to_dict()})
-    return ideas[:n]
 
 
 RADAR_TEXTS = [
@@ -481,7 +422,7 @@ def demo_publisher_parts(data_dir: Path) -> dict:
     """Drive y Buffer simulados para el modo demo: sin red, sin cuentas y sin publicar nada."""
     from .publishing import BUFFER_API
 
-    folder = data_dir / "drive-demo" / "Teatrito de Papel - publicar"
+    folder = data_dir / "drive-demo" / "Ahora lo entiendes - publicar"
     folder.mkdir(parents=True, exist_ok=True)
 
     def http(method: str, url: str, headers: dict, body: bytes | None) -> tuple[int, dict, bytes]:

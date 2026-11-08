@@ -25,7 +25,7 @@ def _bind(host: str, port: int) -> socket.socket:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Aplicación web de Teatrito de Papel.")
+    parser = argparse.ArgumentParser(description="Aplicación web de Radar Studio.")
     parser.add_argument("--host", default="127.0.0.1",
                         help="Dirección de escucha (por defecto solo este equipo).")
     parser.add_argument("--port", type=int, default=0,
@@ -58,7 +58,7 @@ def main() -> int:
     if ":" in shown:
         shown = f"[{shown}]"
     url = f"http://{shown}:{port}/" + (f"?token={token}" if token else "")
-    print(f"Teatrito de Papel{' (modo demo)' if args.demo else ''} → {url}", flush=True)
+    print(f"Radar Studio{' (modo demo)' if args.demo else ''} → {url}", flush=True)
 
     import uvicorn
     from .web import create_app

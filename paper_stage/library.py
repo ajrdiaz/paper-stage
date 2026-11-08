@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import difflib
 import json
 import re
 import shutil
 import subprocess
 from pathlib import Path
 
-from .core import LIA, OUTPUT_DIR, SLUG_RE, slugify
+from .core import DEFAULT_SERIE, OUTPUT_DIR, SLUG_RE, slugify
 
 # Paso del pipeline (§1 del prompt) → archivos que indican que está hecho.
 # "a|b" vale con cualquiera de los dos: los videos anteriores al QA previo no tienen
@@ -97,14 +98,17 @@ def _cover_time(publish: dict) -> float:
         return 1.5
 
 
+HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
 def _fresh(target: Path, *sources: Path) -> bool:
     return target.exists() and all(
         target.stat().st_mtime >= src.stat().st_mtime for src in sources if src.exists())
 
 
-# Oculta los subtítulos y escribe texto_portada en su franja, con su misma letra y el
-# amarillo mostaza de la palabra activa, reduciéndolo hasta que quepa.
-_COVER_JS = """(text) => {
+# Oculta los subtítulos y escribe texto_portada en su lugar, con el color de la palabra activa
+# (color_acento en publish.json), reduciéndolo hasta que quepa.
+_COVER_JS = """({text, color}) => {
   const subs = document.getElementById("subs");
   let box = {x: innerWidth * .08, y: innerHeight * .77, w: innerWidth * .84, h: innerHeight * .1};
   if (subs) {
@@ -119,7 +123,7 @@ _COVER_JS = """(text) => {
     display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",
     padding: "0 " + box.w * .04 + "px", boxSizing: "border-box",
     fontFamily: "'Fredoka', sans-serif", fontWeight: "700", lineHeight: "1.05",
-    color: "#E9B949", zIndex: 99999,
+    color, textShadow: "0 4px 18px rgba(0, 0, 0, .75)", zIndex: 99999,
   });
   el.textContent = text;
   document.body.appendChild(el);
@@ -157,7 +161,9 @@ def cover(out_dir: Path) -> Path | None:
                 # Sin devolver nada: si renderAt devuelve un objeto grande (p. ej. una timeline
                 # de GSAP), evaluate intenta serializarlo y se cuelga.
                 page.evaluate(f"() => {{ window.renderAt({_cover_time(publish)}); }}")
-                page.evaluate(_COVER_JS, str(publish.get("texto_portada") or "").strip())
+                accent = str(publish.get("color_acento") or "")
+                page.evaluate(_COVER_JS, {"text": str(publish.get("texto_portada") or "").strip(),
+                                          "color": accent if HEX_COLOR.match(accent) else "#FFFFFF"})
                 page.screenshot(path=str(image), type="jpeg", quality=92)
             finally:
                 browser.close()
@@ -202,7 +208,9 @@ def poster(out_dir: Path) -> Path | None:
 
 # Lo que la app comprueba por su cuenta en cada video terminado, sin fiarse de qa.md.
 SIZES = {"vertical": (1080, 1920), "horizontal": (1920, 1080)}
+MIN_DURATION, MAX_DURATION = 61.0, 70.0  # Creator Rewards pide más de un minuto
 MAX_HASHTAGS, MAX_SHORT_DESCRIPTION, MAX_TITLE = 5, 150, 60
+MIN_COPIED_RUN, MAX_COPIED = 5, 0.2  # frases de 5 palabras o más; más del 20 % del guion ya es copiar
 # Gancho (§2 y §7 del prompt): la voz arranca casi en el frame 1 y el gancho escrito es corto.
 MAX_VOICE_START, MAX_HOOK_WORDS = 0.3, 6
 VOICE_SILENCE_DB = -35  # el mismo umbral de "hay voz" que el QA del prompt
@@ -254,7 +262,7 @@ def _checks(out_dir: Path) -> list[dict]:
         checks.append({"label": label, "ok": bool(ok), "detail": detail})
 
     total = float((info.get("format") or {}).get("duration") or 0)
-    check("Duración entre 60 y 65 s", 60.0 <= total <= 65.0, f"{total:.2f} s")
+    check(f"Duración entre {MIN_DURATION:.0f} y {MAX_DURATION:.0f} s", MIN_DURATION <= total <= MAX_DURATION, f"{total:.2f} s")
     size = (v.get("width"), v.get("height"))
     expected = SIZES.get(formato or "", None)
     check("Resolución", size == expected if expected else size in SIZES.values(),
@@ -281,6 +289,10 @@ def _checks(out_dir: Path) -> list[dict]:
         words = len(hook.split())
         check(f"Gancho escrito de {MAX_HOOK_WORDS} palabras como máximo", 0 < words <= MAX_HOOK_WORDS,
               f"«{hook}» ({words} palabras)" if hook else "falta texto_gancho")
+    similarity = read_json(out_dir / "parecido.json")
+    if isinstance(similarity, dict):
+        copied = float(similarity.get("copiado") or 0)
+        check("Guion distinto de los videos que lo inspiraron", copied <= MAX_COPIED, f"{copied:.0%} de frases iguales")
     hashtags = publish.get("hashtags") or []
     check(f"{MAX_HASHTAGS} hashtags", len(hashtags) == MAX_HASHTAGS, f"{len(hashtags)}")
     short = str(publish.get("descripcion_corta") or "")
@@ -292,14 +304,33 @@ def _checks(out_dir: Path) -> list[dict]:
     return checks
 
 
+def copied_share(script: str, source: str) -> float:
+    """Parte del guion que aparece igual en la fuente, en tramos de MIN_COPIED_RUN palabras o más."""
+    mine, theirs = [re.findall(r"\w+", t.lower()) for t in (script, source)]
+    if not mine:
+        return 0.0
+    blocks = difflib.SequenceMatcher(None, mine, theirs, autojunk=False).get_matching_blocks()
+    return sum(b.size for b in blocks if b.size >= MIN_COPIED_RUN) / len(mine)
+
+
+def write_similarity(out_dir: Path, sources: list[str]) -> None:
+    """Guarda cuánto se parece el guion a los videos que lo inspiraron (lo revisa verify)."""
+    script = read_json(out_dir / "script.json")
+    if not sources or not isinstance(script, dict):
+        return
+    text = " ".join(str(s.get("vo") or "") for s in script.get("escenas") or [] if isinstance(s, dict))
+    (out_dir / "parecido.json").write_text(
+        json.dumps({"copiado": round(max(copied_share(text, s) for s in sources), 3)}) + "\n", encoding="utf-8")
+
+
 def verify(out_dir: Path, compute: bool = True) -> dict | None:
     """Revisión automática de final.mp4 y publish.json, guardada en verify.json mientras
     no cambien. Con compute=False solo devuelve la guardada (para listados rápidos)."""
     video, cache = out_dir / "final.mp4", out_dir / "verify.json"
     if not video.exists():
         return None
-    sources = [p for p in (video, out_dir / "publish.json", out_dir / "script.json", out_dir / "voice.wav")
-               if p.exists()]
+    sources = [p for p in (video, out_dir / "publish.json", out_dir / "script.json", out_dir / "voice.wav",
+                           out_dir / "parecido.json") if p.exists()]
     stamp = [round(p.stat().st_mtime, 3) for p in sources]
     cached = read_json(cache)
     if isinstance(cached, dict) and cached.get("stamp") == stamp:
@@ -318,16 +349,15 @@ def verify(out_dir: Path, compute: bool = True) -> dict | None:
 
 def _title(out_dir: Path) -> str:
     script = read_json(out_dir / "script.json")
-    if isinstance(script, dict) and script.get("titulo_crayon"):
-        return str(script["titulo_crayon"])
+    if isinstance(script, dict) and script.get("titulo"):
+        return str(script["titulo"])
     return out_dir.name.replace("-", " ").capitalize()
 
 
-def script_character(script: dict | None) -> str:
-    """ID del personaje de un script.json. Los videos anteriores a los personajes no lo
-    indican (son de Lía), y alguno trae el nombre («Lía») en vez del ID: slugify los iguala."""
-    value = script.get("personaje") if isinstance(script, dict) else None
-    return slugify(str(value)) if value else LIA.id
+def script_serie(script: dict | None) -> str:
+    """ID de la serie de un script.json. Si el agente escribió el nombre en vez del ID, slugify los iguala."""
+    value = script.get("serie") if isinstance(script, dict) else None
+    return slugify(str(value)) if value else DEFAULT_SERIE.id
 
 
 def summary(out_dir: Path) -> dict:
@@ -340,7 +370,7 @@ def summary(out_dir: Path) -> dict:
         "title": _title(out_dir),
         "idioma": script.get("idioma"),
         "formato": script.get("formato"),
-        "personaje": script_character(script),
+        "serie": script_serie(script),
         "gancho": script.get("gancho"),
         "tipo_gancho": script.get("tipo_gancho"),
         "has_video": final.exists(),
@@ -361,16 +391,16 @@ def list_videos() -> list[dict]:
     return sorted((summary(d) for d in dirs), key=lambda v: v["updated"], reverse=True)
 
 
-def videos_of(personaje: str, limit: int = 3) -> list[str]:
-    """Slugs de los videos terminados de un personaje, del más reciente al más antiguo."""
-    return [v["slug"] for v in list_videos() if v["personaje"] == personaje and v["has_video"]][:limit]
+def videos_of(serie: str, limit: int = 3) -> list[str]:
+    """Slugs de los videos terminados de una serie, del más reciente al más antiguo."""
+    return [v["slug"] for v in list_videos() if v["serie"] == serie and v["has_video"]][:limit]
 
 
-def hooks_of(personaje: str, limit: int = 6) -> list[str]:
-    """Ganchos de los últimos videos de un personaje («tipo: gancho»), del más reciente al más antiguo."""
+def hooks_of(serie: str, limit: int = 6) -> list[str]:
+    """Ganchos de los últimos videos de una serie («tipo: gancho»), del más reciente al más antiguo."""
     hooks = []
     for v in list_videos():
-        if v["personaje"] == personaje and v.get("gancho"):
+        if v["serie"] == serie and v.get("gancho"):
             hooks.append(f"{v['tipo_gancho']}: {v['gancho']}" if v.get("tipo_gancho") else str(v["gancho"]))
     return hooks[:limit]
 

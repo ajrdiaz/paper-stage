@@ -22,8 +22,8 @@ os.environ["PAPER_STAGE_DEMO_DELAY"] = "0.01"
 from starlette.testclient import TestClient  # noqa: E402
 
 from paper_stage import core, library  # noqa: E402
-from paper_stage.demo import (analyze_demo, demo_account_search, demo_radar_source, find_niches_demo,  # noqa: E402
-                              make_ideas_demo, run_demo)
+from paper_stage.demo import (LINES, analyze_demo, demo_account_search, demo_radar_source,  # noqa: E402
+                              find_niches_demo, make_ideas_demo, run_demo)
 from paper_stage.jobs import JobManager  # noqa: E402
 from paper_stage import publishing, radar  # noqa: E402
 
@@ -43,13 +43,12 @@ async def slow_runner(req, *, resume_session=None, continuing=False, on_stderr=N
 
 
 CORAL = {
-    "nombre": "Coral", "nicho": "Animales del océano profundo", "idioma": "en", "edad": "4-6",
-    "apariencia": "Una pulpita lila de papel con casco de buzo y una linterna amarilla en un tentáculo.",
-    "personalidad": "Valiente y curiosa, habla en susurros emocionados.",
-    "escenario": "Un submarino de papel con ojo de buey redondo.",
+    "nombre": "Coral", "nicho": "Animales del océano profundo", "idioma": "en",
+    "estilo": "Animación oscura y luminosa del fondo del mar, con criaturas translúcidas.",
+    "tono": "Curioso y directo, con humor ligero.",
     "paleta": ["#2b4c7e", "#6FB7B7", "#B58BD6", "#12213D"],
     "voces": {"es": "ef_dora", "en": "af_sky"}, "voz_estilo": "juvenil y susurrada",
-    "serie": "Coral Under the Sea", "cta": {"en": "Follow me to dive deeper!"},
+    "cta": {"en": "Follow me to dive deeper!"},
 }
 
 
@@ -77,8 +76,8 @@ class CoreTests(unittest.TestCase):
         self.assertIn("formato `horizontal`", prompt)
 
     def test_validation(self):
-        for bad in (dict(tema="x"), dict(tema="Volcanes", edad="seis"),
-                    dict(tema="Volcanes", idioma="fr"), dict(tema="Volcanes", max_budget_usd=0.1)):
+        for bad in (dict(tema="x"), dict(tema="Volcanes", idioma="fr"), dict(tema="Volcanes", max_budget_usd=0.1),
+                    dict(tema="Volcanes", notas="x" * 1501)):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 core.VideoRequest(**bad).validate()
 
@@ -92,48 +91,54 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             core.VideoRequest(tema="Volcanes", cta="x" * 81).validate()
 
-    def test_default_character_is_lia(self):
-        req = core.VideoRequest(tema="Volcanes")
+    def test_default_serie(self):
+        req = core.VideoRequest(tema="¿Por qué te da hipo?", notas="  Gancho:   hipo ")
         req.validate()
-        self.assertEqual((req.idioma, req.edad, req.character.id), ("es", "6-9", "lia"))
+        self.assertEqual((req.idioma, req.ficha.id), ("es", "ahora-lo-entiendes"))
         prompt = core.render_prompt(req.variables())
-        self.assertIn("presentado por **Lía**", prompt)
-        self.assertIn("Kokoro `ef_dora` (lang_code `e`)", prompt)
-        self.assertIn('"serie": "Teatrito de Papel"', prompt)
-        self.assertIn("#teatritodepapel", prompt)
-        self.assertIn("primer video de Lía", prompt)
-        self.assertIn("gsap.timeline({ paused: true })", prompt)
-        self.assertIn("`renderAt` **no devuelve nada**", prompt)
-
-    def test_custom_character_prompt(self):
-        character = core.Character(**CORAL)
-        character.id = "coral"
-        character.validate()
-        req = core.VideoRequest(tema="Why do anglerfish glow?", personaje=character.to_dict(),
-                                referencias=["old-coral-video-en"])
-        req.validate()
-        # Toma el idioma, la edad y la frase final del personaje.
-        self.assertEqual((req.idioma, req.edad, req.cta), ("en", "4-6", "Follow me to dive deeper!"))
-        prompt = core.render_prompt(req.variables())
-        self.assertNotIn("Lía", prompt)
-        self.assertNotIn("{{", prompt)
-        for text in ("presentado por **Coral**", "Animales del océano profundo", "Kokoro `af_sky` (lang_code `a`)",
-                     "`#2B4C7E`", "#coralunderthesea", '"personaje": "coral"', "`output/old-coral-video-en/`",
-                     "Un submarino de papel"):
+        for text in ("de la serie «Ahora lo entiendes»", "Kokoro `ef_dora` (lang_code `e`)", '"serie": "ahora-lo-entiendes"',
+                     "#ahoraloentiendes", "primer video de «Ahora lo entiendes»", "gsap.timeline({ paused: true })",
+                     "`renderAt` **no devuelve nada**", "Gancho: hipo", "Sin presentador", "público general adulto"):
             self.assertIn(text, prompt)
-        self.assertIn("Produce Coral's full video", core.kickoff_prompt(req))
+        # Ya no es para niños ni de papel: el prompt no debe arrastrar nada de eso.
+        for text in ("recortes de papel", "gouache", "crayón", "hecho_para_ninos", "Hecho para niños", "años"):
+            self.assertNotIn(text, prompt)
 
-    def test_script_character(self):
-        self.assertEqual(library.script_character({}), "lia")               # anterior a los personajes
-        self.assertEqual(library.script_character({"personaje": "Lía"}), "lia")  # nombre en vez de ID
-        self.assertEqual(library.script_character({"personaje": "coral-2"}), "coral-2")
+    def test_custom_serie_prompt(self):
+        serie = core.Serie(**CORAL)
+        serie.id = "coral"
+        serie.validate()
+        req = core.VideoRequest(tema="Why do anglerfish glow?", serie=serie.to_dict(), referencias=["old-coral-video-en"])
+        req.validate()
+        # Toma el idioma y la frase final de la serie.
+        self.assertEqual((req.idioma, req.cta), ("en", "Follow me to dive deeper!"))
+        prompt = core.render_prompt(req.variables())
+        self.assertNotIn("Ahora lo entiendes", prompt)
+        self.assertNotIn("{{", prompt)
+        for text in ("de la serie «Coral»", "Animales del océano profundo", "Kokoro `af_sky` (lang_code `a`)",
+                     "`#2B4C7E`", "#coral", '"serie": "coral"', "`output/old-coral-video-en/`", "criaturas translúcidas"):
+            self.assertIn(text, prompt)
+        self.assertIn("full video of the series “Coral”", core.kickoff_prompt(req))
 
-    def test_character_validation(self):
+    def test_script_serie(self):
+        self.assertEqual(library.script_serie({}), core.DEFAULT_SERIE.id)
+        self.assertEqual(library.script_serie({"serie": "Ahora lo entiendes"}), core.DEFAULT_SERIE.id)  # nombre en vez de ID
+        self.assertEqual(library.script_serie({"serie": "coral-2"}), "coral-2")
+
+    def test_serie_validation(self):
         for bad in (dict(paleta=["#FFF", "#000000", "#123456"]), dict(paleta=["#000000"] * 2),
-                    dict(voces={"es": "af_heart", "en": "af_sky"}), dict(nicho="x"),
+                    dict(voces={"es": "af_heart", "en": "af_sky"}), dict(nicho="x"), dict(estilo="corto"),
                     dict(idioma="fr"), dict(cta={"es": "x" * 81})):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
-                core.Character(**{**CORAL, **bad}).validate()
+                core.Serie(**{**CORAL, **bad}).validate()
+
+    def test_copied_share(self):
+        source = "los mosquitos te pican a ti porque tu piel huele a la cena y la persona de al lado no"
+        self.assertEqual(library.copied_share("algo totalmente distinto sobre el hipo y el diafragma", source), 0)
+        self.assertEqual(library.copied_share(source, source), 1)
+        # Palabras sueltas en común no son copiar: hacen falta tramos largos.
+        self.assertEqual(library.copied_share("los mosquitos pican y tu piel huele raro", source), 0)
+        self.assertEqual(library.copied_share("", source), 0)
 
     def test_resumed_cost_is_not_counted_twice(self):
         def result(cost, out, session="s1"):
@@ -208,6 +213,7 @@ class AppTests(unittest.TestCase):
                 self.assertTrue(checks["5 hashtags"])
                 self.assertTrue(checks["La voz empieza en ≤0.3 s"])  # la voz demo arranca a 0.2 s
                 self.assertTrue(checks["Gancho escrito de 6 palabras como máximo"])
+                self.assertTrue(checks["Duración entre 61 y 70 s"])
             self.assertEqual(client.get("/files/los-delfines-es/stage.html").status_code, 200)
             self.assertEqual(client.get("/files/los-delfines-es/../../data/paper_stage.db").status_code, 404)
             self.assertEqual(client.get("/files/los-delfines-es/agent_log.jsonl").status_code, 404)
@@ -271,7 +277,7 @@ class AppTests(unittest.TestCase):
             wait_for(client, res.json()["id"], {"done", "failed"})
             shown = []
             for _ in range(2):
-                res = client.post("/api/suggest", json={"idioma": "es", "edad": "6-9", "evitar": shown})
+                res = client.post("/api/suggest", json={"idioma": "es", "evitar": shown})
                 self.assertEqual(res.status_code, 200, res.text)
                 temas = [t["tema"] for t in res.json()["temas"]]
                 self.assertEqual(len(temas), 3)
@@ -280,67 +286,77 @@ class AppTests(unittest.TestCase):
             self.assertEqual(len(set(keys)), 6)
             self.assertNotIn(core.topic_key("¿Por qué el mar es salado?", "es"), keys)
 
-    def test_characters(self):
-        with self.make_client(data="data-characters") as client:
-            chars = client.get("/api/characters").json()
-            self.assertEqual([c["id"] for c in chars], ["lia"])  # siempre hay al menos a Lía
+    def test_series(self):
+        with self.make_client(data="data-series") as client:
+            series = client.get("/api/series").json()
+            self.assertEqual([c["id"] for c in series], [core.DEFAULT_SERIE.id])  # siempre hay al menos una
+            only = series[0]["id"]
+            self.assertEqual(client.delete(f"/api/series/{only}").status_code, 409)  # no se borra la única
 
-            ideas = client.post("/api/characters/suggest", json={"idioma": "es", "edad": "6-9"}).json()["personajes"]
-            self.assertEqual(len(ideas), 3)
-            again = client.post("/api/characters/suggest", json={
-                "idioma": "es", "edad": "6-9",
-                "evitar": [f"{i['personaje']['nombre']} ({i['personaje']['nicho']})" for i in ideas]})
-            names = {i["personaje"]["nombre"] for i in ideas}
-            self.assertFalse(names & {i["personaje"]["nombre"] for i in again.json().get("personajes", [])})
-
-            self.assertEqual(client.post("/api/characters", json={**CORAL, "paleta": ["#123"]}).status_code, 400)
-            self.assertEqual(client.post("/api/characters", json={"nombre": "Solo nombre"}).status_code, 400)
-            res = client.post("/api/characters", json=CORAL)
+            self.assertEqual(client.post("/api/series", json={**CORAL, "paleta": ["#123"]}).status_code, 400)
+            self.assertEqual(client.post("/api/series", json={"nombre": "Solo nombre"}).status_code, 400)
+            res = client.post("/api/series", json=CORAL)
             self.assertEqual(res.status_code, 201, res.text)
             coral = res.json()
-            self.assertEqual((coral["id"], coral["hashtag"]), ("coral", "#coralunderthesea"))
-            self.assertEqual(client.post("/api/characters", json=CORAL).json()["id"], "coral-2")
+            self.assertEqual((coral["id"], coral["hashtag"]), ("coral", "#coral"))
+            self.assertEqual(client.post("/api/series", json=CORAL).json()["id"], "coral-2")
 
-            res = client.post("/api/prompt-preview", json={"tema": "Anglerfish", "personaje_id": "coral"})
-            self.assertIn("presentado por **Coral**", res.json()["prompt"])
+            res = client.post("/api/prompt-preview", json={"tema": "Anglerfish", "serie_id": "coral"})
+            self.assertIn("de la serie «Coral»", res.json()["prompt"])
             self.assertEqual(res.json()["slug"], "anglerfish-en")
-            self.assertEqual(client.post("/api/prompt-preview", json={"tema": "X y", "personaje_id": "nadie"}).status_code, 400)
+            self.assertEqual(client.post("/api/prompt-preview", json={"tema": "X y", "serie_id": "nadie"}).status_code, 400)
 
-            topics = client.post("/api/suggest", json={"personaje_id": "coral"})
+            topics = client.post("/api/suggest", json={"serie_id": "coral"})
             self.assertEqual(topics.status_code, 200, topics.text)
 
-            # El video lleva el personaje y su idioma; el mismo tema no se repite en su serie,
-            # pero otro personaje sí puede tratarlo.
-            job = client.post("/api/jobs", json={"tema": "Las medusas", "personaje_id": "coral"}).json()
-            self.assertEqual(job["request"]["personaje"]["nombre"], "Coral")
-            self.assertEqual(client.delete("/api/characters/coral").status_code, 409)  # en producción
+            # El video lleva la serie y su idioma; el mismo tema no se repite en ella, pero otra sí puede tratarlo.
+            job = client.post("/api/jobs", json={"tema": "Las medusas", "serie_id": "coral"}).json()
+            self.assertEqual(job["request"]["serie"]["nombre"], "Coral")
+            self.assertEqual(client.delete("/api/series/coral").status_code, 409)  # en producción
             job = wait_for(client, job["id"], {"done", "failed"})
             self.assertEqual(job["status"], "done", job["error"])
             video = client.get(f"/api/videos/{job['slug']}").json()
-            self.assertEqual((video["personaje"], video["idioma"]), ("coral", "en"))
+            self.assertEqual((video["serie"], video["idioma"]), ("coral", "en"))
             self.assertIn("Coral", video["texts"]["bible.md"])
-            self.assertEqual(client.post("/api/jobs", json={"tema": "las medusas", "personaje_id": "coral"}).status_code, 400)
-            lia = client.post("/api/jobs", json={"tema": "Las medusas", "idioma": "en"})
-            self.assertEqual(lia.status_code, 201, lia.text)
-            wait_for(client, lia.json()["id"], {"done", "failed"})
+            self.assertEqual(client.post("/api/jobs", json={"tema": "las medusas", "serie_id": "coral"}).status_code, 400)
+            other = client.post("/api/jobs", json={"tema": "Las medusas", "idioma": "en", "serie_id": only})
+            self.assertEqual(other.status_code, 201, other.text)
+            wait_for(client, other.json()["id"], {"done", "failed"})
 
             # Su segundo video copia el diseño del primero y ve su gancho, para no repetir la apertura.
-            res = client.post("/api/prompt-preview", json={"tema": "Octopus ink", "personaje_id": "coral"})
+            res = client.post("/api/prompt-preview", json={"tema": "Octopus ink", "serie_id": "coral"})
             self.assertIn(f"`output/{job['slug']}/`", res.json()["prompt"])
             self.assertIn("- pregunta imposible: Did you know that Las medusas", res.json()["prompt"])
             self.assertIn("- (ninguno todavía)", client.post("/api/prompt-preview", json={
-                "tema": "Otro tema", "personaje_id": "coral-2"}).json()["prompt"])
+                "tema": "Otro tema", "serie_id": "coral-2"}).json()["prompt"])
 
-            listed = {c["id"]: c for c in client.get("/api/characters").json()}
+            listed = {c["id"]: c for c in client.get("/api/series").json()}
             self.assertEqual((listed["coral"]["videos"], listed["coral"]["ultimo_video"]), (1, job["slug"]))
-            res = client.put("/api/characters/coral", json={**CORAL, "nicho": "Criaturas del arrecife"})
+            res = client.put("/api/series/coral", json={**CORAL, "nicho": "Criaturas del arrecife"})
             self.assertEqual(res.json()["nicho"], "Criaturas del arrecife")
-            self.assertEqual(client.put("/api/characters/nadie", json=CORAL).status_code, 404)
-            self.assertIsNone(listed["coral-2"]["canal"])  # los personajes nuevos empiezan sin cuenta
+            self.assertEqual(client.put("/api/series/nadie", json=CORAL).status_code, 404)
+            self.assertIsNone(listed["coral-2"]["canal"])  # las series nuevas empiezan sin cuenta
             client.put("/api/publishing/channels/coral-2", json={"channel_id": "tt2", "channel_name": "@coral"})
-            self.assertEqual(client.delete("/api/characters/coral-2").status_code, 200)
-            self.assertEqual(client.get("/api/characters/coral-2").status_code, 404)
+            self.assertEqual(client.delete("/api/series/coral-2").status_code, 200)
+            self.assertEqual(client.get("/api/series/coral-2").status_code, 404)
             self.assertIsNone(client.app.state.publisher.channel_for("coral-2"))  # su cuenta no queda huérfana
+
+    def test_script_is_compared_with_its_sources(self):
+        with self.make_client(data="data-similar") as client:
+            # El demo usa estas frases en su guion: un guion copiado debe avisarse en la revisión.
+            copied = " ".join(line.format(tema="Las pecas", cta="") for line in LINES["es"])
+            client.app.state.manager.source_texts = lambda ids: [copied] if ids == ["123456"] else []
+            job = client.post("/api/jobs", json={"tema": "Las pecas", "inspiracion": ["123456", "no-vale"]}).json()
+            self.assertEqual(job["request"]["inspiracion"], ["123456"])
+            job = wait_for(client, job["id"], {"done", "failed"})
+            detail = client.get(f"/api/videos/{job['slug']}").json()
+            if shutil.which("ffmpeg"):
+                checks = {c["label"]: c for c in detail["verify"]["checks"]}
+                self.assertFalse(checks["Guion distinto de los videos que lo inspiraron"]["ok"])
+            original = client.post("/api/jobs", json={"tema": "Los lunares"}).json()  # sin fuentes, no se compara
+            original = wait_for(client, original["id"], {"done", "failed"})
+            self.assertFalse((core.OUTPUT_DIR / original["slug"] / "parecido.json").exists())
+            self.assertEqual(client.post("/api/jobs", json={"tema": 123}).status_code, 400)
 
     def test_publish_api_demo(self):
         with self.make_client(data="data-publish") as client:
@@ -354,16 +370,16 @@ class AppTests(unittest.TestCase):
             self.assertEqual((cfg["buffer_key"], cfg["buffer_key_hint"]), (True, "…1234"))
             self.assertNotIn("clave-demo-1234", json.dumps(cfg))  # la clave nunca vuelve al navegador
             self.assertTrue(cfg["ready"])
-            # Sin cuenta de TikTok asignada al personaje, no se publica.
+            # Sin cuenta de TikTok asignada a la serie, no se publica.
             info = client.get(f"/api/videos/{job['slug']}/publish").json()
-            self.assertEqual((info["personaje"], info["channel"]), (core.LIA.id, None))
+            self.assertEqual((info["serie"], info["channel"]), (core.DEFAULT_SERIE.id, None))
             self.assertIn("no tiene cuenta", client.post(f"/api/videos/{job['slug']}/publish", json={"text": "Hola"}).json()["error"])
             channels = client.get("/api/publishing/channels").json()
-            res = client.put(f"/api/publishing/channels/{core.LIA.id}", json={"channel_id": channels[0]["id"], "channel_name": channels[0]["nombre"]})
+            res = client.put(f"/api/publishing/channels/{core.DEFAULT_SERIE.id}", json={"channel_id": channels[0]["id"], "channel_name": channels[0]["nombre"]})
             self.assertEqual(res.json()["canal"], {"id": channels[0]["id"], "nombre": channels[0]["nombre"]})
             self.assertEqual(client.put("/api/publishing/channels/nadie", json={"channel_id": "x"}).status_code, 404)
-            lia = client.get(f"/api/characters/{core.LIA.id}").json()
-            self.assertEqual(lia["canal"]["id"], channels[0]["id"])
+            serie = client.get(f"/api/series/{core.DEFAULT_SERIE.id}").json()
+            self.assertEqual(serie["canal"]["id"], channels[0]["id"])
             info = client.get(f"/api/videos/{job['slug']}/publish").json()
             self.assertEqual(info["channel"]["id"], channels[0]["id"])
             self.assertIn("#", info["default_text"])
@@ -399,7 +415,7 @@ class AppTests(unittest.TestCase):
         with self.make_client(data="data-preview") as client:
             res = client.post("/api/prompt-preview", json={"tema": "El arcoíris", "idioma": "en"})
             self.assertEqual(res.json()["slug"], "el-arcoiris-en")
-            self.assertIn("full video about “El arcoíris”", res.json()["kickoff"])
+            self.assertIn("about “El arcoíris”", res.json()["kickoff"])
             self.assertEqual(client.post("/api/jobs", json={"tema": ""}).status_code, 400)
             self.assertEqual(client.post("/api/jobs", content=b"no-json").status_code, 400)
 
@@ -460,7 +476,7 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
                                    demo=True, default_folder=self.folder, **kw)
         pub.save_config({"buffer_key": "clave-de-prueba-123", "drive_folder": str(self.folder),
                          "create_folder": True})
-        pub.set_channel(core.LIA.id, "tt1", "@teatrito")
+        pub.set_channel(core.DEFAULT_SERIE.id, "tt1", "@teatrito")
         return pub
 
     async def finish(self, pub, slug):
@@ -502,15 +518,15 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
         await self.finish(pub, self.slug)
         self.assertEqual((net.posts[1]["mode"], net.posts[1]["metadata"]["tiktok"]["isAiGenerated"]), ("shareNow", False))
 
-    async def test_channel_per_character(self):
+    async def test_channel_per_serie(self):
         net = FakeNet()
         pub = self.publisher(net)
-        # Un video de otro personaje va a la cuenta de ese personaje, no a la de Lía.
+        # Un video de otra serie va a la cuenta de esa serie, nunca a la de otra.
         slug = "video-de-coral-es"
         out = core.OUTPUT_DIR / slug
         out.mkdir(parents=True, exist_ok=True)
         (out / "final.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"0" * 1000)
-        (out / "script.json").write_text(json.dumps({"personaje": "coral"}), encoding="utf-8")
+        (out / "script.json").write_text(json.dumps({"serie": "coral"}), encoding="utf-8")
         with self.assertRaises(publishing.PublishError) as ctx:
             pub.start(slug, publishing.PublishRequest(text="Hola"))
         self.assertIn("no tiene cuenta", str(ctx.exception))
@@ -523,19 +539,6 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pub.history(slug)[0]["channel_name"], "@coral")
         pub.set_channel("coral", "")
         self.assertIsNone(pub.channel_for("coral"))
-
-    def test_migrate_single_channel(self):
-        # Antes había una sola cuenta: pasa a los personajes que ya existían, sin pisar otras.
-        pub = publishing.Publisher(sqlite3.connect(":memory:"), demo=True, default_folder=self.folder)
-        pub._set("channel_id", "tt1")
-        pub._set("channel_name", "@mikavali")
-        pub.set_channel("chispi", "tt9", "@otra")
-        pub.migrate_channels(["lia", "chispi"])
-        self.assertEqual(pub.channels_by_character(), {"lia": {"id": "tt1", "nombre": "@mikavali"},
-                                                       "chispi": {"id": "tt9", "nombre": "@otra"}})
-        self.assertEqual(pub._get("channel_id"), "")
-        pub.migrate_channels(["nuevo"])  # solo una vez: los personajes nuevos empiezan sin cuenta
-        self.assertIsNone(pub.channel_for("nuevo"))
 
     async def test_manual_mark(self):
         net = FakeNet()
@@ -612,7 +615,7 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
         st = await self.finish(pub, publishing.TEST_SLUG)
         if shutil.which("ffmpeg"):
             self.assertEqual(st["state"], "done", st)
-            self.assertTrue((self.folder / "prueba-teatrito.mp4").exists())
+            self.assertTrue((self.folder / "prueba-publicacion.mp4").exists())
 
     def test_agent_does_not_see_secrets(self):
         os.environ["PAPER_STAGE_BUFFER_KEY"] = "secreta"
@@ -898,6 +901,7 @@ class RadarApiTests(unittest.TestCase):
             self.assertEqual(len(temas), 5)
             self.assertNotIn("¿Por qué bostezas cuando otro bosteza?", temas)  # ya hecho
             self.assertTrue(state["ideas"][0]["fuentes"][0]["url"].startswith("https://www.tiktok.com/@"))
+            self.assertFalse(state["ideas"][0]["usada"])
 
             discarded = state["ideas"][0]
             self.assertEqual(len(client.delete(f"/api/radar/ideas/{discarded['id']}").json()["ideas"]), 4)

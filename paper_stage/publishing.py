@@ -28,7 +28,7 @@ from . import library
 BUFFER_API = "https://api.buffer.com"
 # Con un video adjunto, TikTok admite 2200 unidades UTF-16 de texto (guía de Buffer).
 MAX_TIKTOK_TEXT = 2200
-DRIVE_FOLDER_NAME = "Teatrito de Papel - publicar"
+DRIVE_FOLDER_NAME = "Ahora lo entiendes - publicar"
 # Drive para escritorio guarda el ID de cada archivo en un atributo extendido; el nombre
 # cambió entre versiones (Drive File Stream usaba user.drive.id).
 DRIVE_ID_ATTRS = ("com.google.drivefs.item-id#S", "user.drive.id")
@@ -52,9 +52,9 @@ CREATE TABLE IF NOT EXISTS publications (
     url TEXT NOT NULL,
     created_at REAL NOT NULL
 );
--- Cada personaje publica en su cuenta de TikTok (canal de Buffer); varios pueden compartirla.
-CREATE TABLE IF NOT EXISTS character_channels (
-    personaje TEXT PRIMARY KEY,
+-- Cada serie publica en su cuenta de TikTok (canal de Buffer); varias pueden compartirla.
+CREATE TABLE IF NOT EXISTS serie_channels (
+    serie TEXT PRIMARY KEY,
     channel_id TEXT NOT NULL,
     channel_name TEXT
 );
@@ -287,39 +287,27 @@ class Publisher:
         roots = self._roots()
         return Path(value) if value else (roots[0] / DRIVE_FOLDER_NAME if roots else None)
 
-    def migrate_channels(self, personajes: list[str]) -> None:
-        """Antes había una sola cuenta de TikTok para toda la app: pasa a ser la de los
-        personajes que ya existían."""
-        channel_id = self._get("channel_id")
-        if channel_id:
-            name = self._get("channel_name")
-            for pid in personajes:
-                self.db.execute("INSERT OR IGNORE INTO character_channels (personaje, channel_id, channel_name) "
-                                "VALUES (?, ?, ?)", [pid, channel_id, name])
-            self.db.execute("DELETE FROM settings WHERE key IN ('channel_id', 'channel_name')")
-            self.db.commit()
-
-    def channels_by_character(self) -> dict[str, dict]:
-        """Personaje → {"id", "nombre"} de su cuenta de TikTok."""
-        rows = self.db.execute("SELECT personaje, channel_id, channel_name FROM character_channels")
+    def channels_by_serie(self) -> dict[str, dict]:
+        """Serie → {"id", "nombre"} de su cuenta de TikTok."""
+        rows = self.db.execute("SELECT serie, channel_id, channel_name FROM serie_channels")
         return {pid: {"id": cid, "nombre": name or cid} for pid, cid, name in rows}
 
-    def channel_for(self, personaje: str) -> dict | None:
-        return self.channels_by_character().get(personaje)
+    def channel_for(self, serie: str) -> dict | None:
+        return self.channels_by_serie().get(serie)
 
-    def set_channel(self, personaje: str, channel_id: str, channel_name: str = "") -> None:
-        """Asigna (o, con channel_id vacío, quita) la cuenta de TikTok de un personaje."""
+    def set_channel(self, serie: str, channel_id: str, channel_name: str = "") -> None:
+        """Asigna (o, con channel_id vacío, quita) la cuenta de TikTok de una serie."""
         if channel_id:
-            self.db.execute("INSERT INTO character_channels (personaje, channel_id, channel_name) VALUES (?, ?, ?) "
-                            "ON CONFLICT(personaje) DO UPDATE SET channel_id = excluded.channel_id, "
-                            "channel_name = excluded.channel_name", [personaje, channel_id, channel_name])
+            self.db.execute("INSERT INTO serie_channels (serie, channel_id, channel_name) VALUES (?, ?, ?) "
+                            "ON CONFLICT(serie) DO UPDATE SET channel_id = excluded.channel_id, "
+                            "channel_name = excluded.channel_name", [serie, channel_id, channel_name])
         else:
-            self.db.execute("DELETE FROM character_channels WHERE personaje = ?", [personaje])
+            self.db.execute("DELETE FROM serie_channels WHERE serie = ?", [serie])
         self.db.commit()
 
     def video_channel(self, slug: str) -> tuple[str, dict | None]:
-        """Personaje de un video y la cuenta de TikTok en la que se publica."""
-        pid = library.script_character(library.read_json(library.slug_dir(slug) / "script.json"))
+        """Serie de un video y la cuenta de TikTok en la que se publica."""
+        pid = library.script_serie(library.read_json(library.slug_dir(slug) / "script.json"))
         return pid, self.channel_for(pid)
 
     def config(self) -> dict:
@@ -331,10 +319,10 @@ class Publisher:
             "drive_folder_url": folder_url(folder_id) if folder_id else "",
             "buffer_key": bool(key), "buffer_key_hint": f"…{key[-4:]}" if len(key) > 8 else "",
             "buffer_key_env": bool(os.environ.get("PAPER_STAGE_BUFFER_KEY")),
-            "channels": self.channels_by_character(),
+            "channels": self.channels_by_serie(),
             "drive_folder": str(folder) if folder else "", "drive_folder_exists": bool(folder and folder.is_dir()),
             "drive_roots": [str(r) for r in self._roots()], "ai_label": self._get("ai_label", "1") == "1",
-            # La cuenta de TikTok es de cada personaje: se comprueba al publicar.
+            # La cuenta de TikTok es de cada serie: se comprueba al publicar.
             "ready": bool(key and folder and folder.is_dir()),
             "demo": self.demo,
         }
@@ -457,7 +445,7 @@ class Publisher:
             # Nunca a la cuenta de otra serie: sin cuenta asignada, no se publica.
             channel = self.video_channel(slug)[1]
             if not channel:
-                raise PublishError("El personaje de este video no tiene cuenta de TikTok. Elígela en su ficha (Personajes).")
+                raise PublishError("La serie de este video no tiene cuenta de TikTok. Elígela en su ficha (Series).")
             cfg = {**cfg, "channel_id": channel["id"], "channel_name": channel["nombre"]}
             done = [h for h in self.history(slug) if h["channel_id"] == cfg["channel_id"] or h["mode"] == MANUAL]
             if done and not req.again:
@@ -490,7 +478,7 @@ class Publisher:
                 lost = sorted({c["nombre"] for c in cfg["channels"].values() if c["id"] not in found})
                 if lost:
                     raise PublishError(f"Estas cuentas ya no están en Buffer: {', '.join(lost)}. "
-                                       "Elige otra en la ficha de sus personajes.")
+                                       "Elige otra en la ficha de sus series.")
                 self.status[slug].update(state="done", step="Todo listo: Drive sirve el video y Buffer responde.")
                 return
             post = await self._post(slug, req, cfg, url)
@@ -514,7 +502,7 @@ class Publisher:
     async def _upload(self, slug: str, cfg: dict) -> Path:
         folder = Path(cfg["drive_folder"])
         if slug == TEST_SLUG:
-            dest = folder / "prueba-teatrito.mp4"
+            dest = folder / "prueba-publicacion.mp4"
             if not dest.exists():
                 self._step(slug, "Creando un video de prueba de 1 s…")
                 await asyncio.to_thread(_test_video, dest)

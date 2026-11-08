@@ -1,4 +1,4 @@
-"""Aplicación web de Teatrito de Papel (Starlette + uvicorn, sin paso de compilación)."""
+"""Aplicación web de Radar Studio (Starlette + uvicorn, sin paso de compilación)."""
 
 from __future__ import annotations
 
@@ -34,25 +34,26 @@ def _error(message: str, status: int = 400) -> JSONResponse:
 
 
 def _request_from(payload: dict) -> core.VideoRequest:
-    # El personaje llega como personaje_id y lo copia el gestor (prepare), nunca el cliente.
-    allowed = {f.name for f in fields(core.VideoRequest)} - {"slug", "extra", "personaje", "referencias"}
+    # La serie llega como serie_id y la copia el gestor (prepare), nunca el cliente.
+    allowed = {f.name for f in fields(core.VideoRequest)} - {"slug", "extra", "serie", "referencias", "ganchos_previos"}
     data = {k: v for k, v in payload.items() if k in allowed and v not in (None, "")}
     if "max_turns" in data:
         data["max_turns"] = int(data["max_turns"])
     if "max_budget_usd" in data:
         data["max_budget_usd"] = float(data["max_budget_usd"])
-    if not data.get("tema"):
+    if not data.get("tema") or not isinstance(data["tema"], str):
         raise ValueError("Escribe un tema.")
+    if not isinstance(data.get("inspiracion", []), list):
+        raise ValueError("Inspiración no válida.")
     return core.VideoRequest(**data)
 
 
-def _character_from(payload: dict) -> core.Character:
-    allowed = {f.name for f in fields(core.Character)} - {"id"}
+def _serie_from(payload: dict) -> core.Serie:
+    allowed = {f.name for f in fields(core.Serie)} - {"id"}
     try:
-        return core.Character(**{k: v for k, v in payload.items() if k in allowed})
+        return core.Serie(**{k: v for k, v in payload.items() if k in allowed})
     except TypeError:
-        raise ValueError("Faltan datos del personaje: nombre, nicho, apariencia, personalidad, "
-                         "escenario y paleta.")
+        raise ValueError("Faltan datos de la serie: nombre, nicho, estilo, tono y paleta.")
 
 
 async def _json(request: Request) -> dict:
@@ -107,7 +108,7 @@ class TokenAuth(BaseHTTPMiddleware):
 
 
 def create_app(manager: JobManager | None = None, token: str | None = None,
-               suggester: Callable | None = None, character_suggester: Callable | None = None,
+               suggester: Callable | None = None,
                publisher: Publisher | None = None, radar: Radar | None = None) -> Starlette:
     if manager is None:
         runner = None
@@ -131,18 +132,13 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             from .demo import demo_publisher_parts
             parts = demo_publisher_parts(manager.data_dir)
         publisher = Publisher(manager.store.db, **parts)
-    publisher.migrate_channels([c.id for c in manager.characters.list()])
     if radar is None:
         parts = {}
         if demo:
             from .demo import demo_radar_parts
             parts = demo_radar_parts()
         radar = Radar(manager.store.db, manager.data_dir, used_topics=manager.used_topics, **parts)
-    if character_suggester is None:
-        if demo:
-            from .demo import suggest_characters_demo as character_suggester
-        else:
-            character_suggester = core.suggest_characters
+    manager.source_texts = radar.transcripts
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -166,7 +162,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             "models": core.MODELS, "default_model": core.DEFAULT_MODEL,
             "efforts": core.EFFORTS, "languages": core.LANGUAGES, "formats": core.FORMATS,
             "demo": demo, "concurrency": manager.concurrency, "default_cta": core.DEFAULT_CTA,
-            "voices": core.VOICES, "default_character": core.LIA.id,
+            "voices": core.VOICES, "default_serie": manager.series.list()[0].id,
         })
 
     async def health(request: Request):
@@ -175,28 +171,26 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
     async def prompt_preview(request: Request):
         try:
             payload = await _json(request)
-            req = manager.prepare(_request_from(payload), payload.get("personaje_id"))
+            req = manager.prepare(_request_from(payload), payload.get("serie_id"))
             return JSONResponse({"slug": req.slug, "prompt": core.render_prompt(req.variables()),
                                  "kickoff": core.kickoff_prompt(req)})
         except (ValueError, TypeError) as exc:
             return _error(str(exc))
 
     async def suggest(request: Request):
-        """3 temas nuevos del nicho del personaje: ni ya producidos o en cola por él, ni entre
-        los que ya se mostraron."""
+        """3 temas nuevos del nicho de la serie: ni ya producidos o en cola, ni entre los que ya se mostraron."""
         payload = await _json(request)
-        character = manager.characters.get(payload.get("personaje_id") or core.LIA.id)
-        if not character:
-            return _error("Personaje no encontrado.", 404)
-        idioma = payload.get("idioma") or character.idioma
-        edad = str(payload.get("edad") or character.edad)
-        if idioma not in core.LANGUAGES or not core.AGE_RE.match(edad):
-            return _error("Idioma o edad no válidos.")
+        serie = manager.series.get(payload.get("serie_id")) if payload.get("serie_id") else manager.series.list()[0]
+        if not serie:
+            return _error("Serie no encontrada.", 404)
+        idioma = payload.get("idioma") or serie.idioma
+        if idioma not in core.LANGUAGES:
+            return _error("Idioma no válido.")
         pista = " ".join(str(payload.get("pista") or "").split())[:120]
         shown = [" ".join(str(t).split()) for t in (payload.get("evitar") or [])][:60]
-        used = await asyncio.to_thread(manager.used_topics, idioma, character.id)
+        used = await asyncio.to_thread(manager.used_topics, idioma, serie.id)
         try:
-            ideas = await suggester(character, idioma, edad, pista, used + shown, 6)
+            ideas = await suggester(serie, idioma, pista, used + shown, 6)
         except Exception as exc:  # noqa: BLE001 — credenciales, red o respuesta rara del modelo
             return _error(f"No se pudieron sugerir temas: {exc}", 502)
         taken = {core.topic_key(t, idioma) for t in used + shown}
@@ -205,7 +199,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             key = core.topic_key(idea["tema"], idioma)
             if key in taken or not 2 <= len(idea["tema"]) <= 200:
                 continue
-            if await asyncio.to_thread(manager.is_used, idea["tema"], idioma, character.id):
+            if await asyncio.to_thread(manager.is_used, idea["tema"], idioma, serie.id):
                 continue
             taken.add(key)
             picked.append(idea)
@@ -215,79 +209,52 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             return _error("No salieron temas nuevos. Prueba otra vez o cambia la pista.", 502)
         return JSONResponse({"temas": picked})
 
-    # ------------------------------------------------------------------ personajes
+    # ------------------------------------------------------------------ series
 
-    def _character_json(character: core.Character, videos: list[dict]) -> dict:
-        mine = [v for v in videos if v["personaje"] == character.id]
+    def _serie_json(serie: core.Serie, videos: list[dict]) -> dict:
+        mine = [v for v in videos if v["serie"] == serie.id]
         done = [v for v in mine if v["has_video"]]
-        return {**character.to_dict(), "hashtag": character.hashtag, "videos": len(mine),
-                "ultimo_video": done[0]["slug"] if done else None, "canal": publisher.channel_for(character.id)}
+        return {**serie.to_dict(), "hashtag": serie.hashtag, "videos": len(mine),
+                "ultimo_video": done[0]["slug"] if done else None, "canal": publisher.channel_for(serie.id)}
 
-    async def list_characters(request: Request):
+    async def list_series(request: Request):
         videos = await asyncio.to_thread(library.list_videos)
-        return JSONResponse([_character_json(c, videos) for c in manager.characters.list()])
+        return JSONResponse([_serie_json(c, videos) for c in manager.series.list()])
 
-    async def get_character(request: Request):
-        character = manager.characters.get(request.path_params["character_id"])
-        if not character:
-            return _error("Personaje no encontrado.", 404)
-        return JSONResponse(_character_json(character, await asyncio.to_thread(library.list_videos)))
+    async def get_serie(request: Request):
+        serie = manager.series.get(request.path_params["serie_id"])
+        if not serie:
+            return _error("Serie no encontrada.", 404)
+        return JSONResponse(_serie_json(serie, await asyncio.to_thread(library.list_videos)))
 
-    async def create_character(request: Request):
+    async def create_serie(request: Request):
         try:
-            character = manager.characters.create(_character_from(await _json(request)))
+            serie = manager.series.create(_serie_from(await _json(request)))
         except ValueError as exc:
             return _error(str(exc))
-        return JSONResponse(_character_json(character, []), status_code=201)
+        return JSONResponse(_serie_json(serie, []), status_code=201)
 
-    async def update_character(request: Request):
+    async def update_serie(request: Request):
         try:
-            character = manager.characters.update(request.path_params["character_id"],
-                                                  _character_from(await _json(request)))
+            serie = manager.series.update(request.path_params["serie_id"],
+                                                  _serie_from(await _json(request)))
         except KeyError:
-            return _error("Personaje no encontrado.", 404)
+            return _error("Serie no encontrada.", 404)
         except ValueError as exc:
             return _error(str(exc))
-        return JSONResponse(_character_json(character, await asyncio.to_thread(library.list_videos)))
+        return JSONResponse(_serie_json(serie, await asyncio.to_thread(library.list_videos)))
 
-    async def delete_character(request: Request):
-        character_id = request.path_params["character_id"]
-        if not manager.characters.get(character_id):
-            return _error("Personaje no encontrado.", 404)
-        if character_id in manager.active_characters():
-            return _error("Este personaje tiene videos en producción.", 409)
-        manager.characters.delete(character_id)
-        publisher.set_channel(character_id, "")
+    async def delete_serie(request: Request):
+        serie_id = request.path_params["serie_id"]
+        if not manager.series.get(serie_id):
+            return _error("Serie no encontrada.", 404)
+        if serie_id in manager.active_series():
+            return _error("Esta serie tiene videos en producción.", 409)
+        if len(manager.series.list()) == 1:
+            return _error("Es tu única serie: crea otra antes de borrarla.", 409)
+        manager.series.delete(serie_id)
+        publisher.set_channel(serie_id, "")
         return JSONResponse({"ok": True})
-
-    async def suggest_characters(request: Request):
-        """3 ideas de personaje (con su nicho) que no repitan nombre ni nicho de los existentes
-        ni de las ideas ya mostradas."""
-        payload = await _json(request)
-        idioma, edad = payload.get("idioma") or "es", str(payload.get("edad") or "6-9")
-        if idioma not in core.LANGUAGES or not core.AGE_RE.match(edad):
-            return _error("Idioma o edad no válidos.")
-        pista = " ".join(str(payload.get("pista") or "").split())[:160]
-        existing = [f"{c.nombre} ({c.nicho})" for c in manager.characters.list()]
-        shown = [" ".join(str(t).split()) for t in (payload.get("evitar") or [])][:30]
-        try:
-            ideas = await character_suggester(idioma, edad, pista, existing + shown, 5)
-        except Exception as exc:  # noqa: BLE001 — credenciales, red o respuesta rara del modelo
-            return _error(f"No se pudieron proponer personajes: {exc}", 502)
-        taken = {core.topic_key(c.nombre, "") for c in manager.characters.list()}
-        taken |= {core.topic_key(t.split(" (")[0], "") for t in shown}
-        picked = []
-        for idea in ideas:
-            key = core.topic_key(idea["personaje"]["nombre"], "")
-            if key in taken:
-                continue
-            taken.add(key)
-            picked.append(idea)
-            if len(picked) == 3:
-                break
-        if not picked:
-            return _error("No salieron personajes nuevos. Prueba otra vez o cambia la pista.", 502)
-        return JSONResponse({"personajes": picked})
 
     # ------------------------------------------------------------------ trabajos
 
@@ -297,7 +264,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
     async def create_job(request: Request):
         try:
             payload = await _json(request)
-            job = manager.create(_request_from(payload), payload.get("personaje_id"))
+            job = manager.create(_request_from(payload), payload.get("serie_id"))
         except (ValueError, TypeError) as exc:
             return _error(str(exc))
         return JSONResponse(job, status_code=201)
@@ -372,18 +339,18 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         except PublishError as exc:
             return _error(str(exc), 502)
 
-    async def character_channel(request: Request):
-        """Asigna la cuenta de TikTok (canal de Buffer) de un personaje; vacía, se la quita."""
-        character_id = request.path_params["character_id"]
-        if not manager.characters.get(character_id):
-            return _error("Personaje no encontrado.", 404)
+    async def serie_channel(request: Request):
+        """Asigna la cuenta de TikTok (canal de Buffer) de una serie; vacía, se la quita."""
+        serie_id = request.path_params["serie_id"]
+        if not manager.series.get(serie_id):
+            return _error("Serie no encontrada.", 404)
         try:
             payload = await _json(request)
         except ValueError as exc:
             return _error(str(exc))
         channel_id = str(payload.get("channel_id") or "").strip()
-        publisher.set_channel(character_id, channel_id, str(payload.get("channel_name") or "").strip())
-        return JSONResponse({"canal": publisher.channel_for(character_id)})
+        publisher.set_channel(serie_id, channel_id, str(payload.get("channel_name") or "").strip())
+        return JSONResponse({"canal": publisher.channel_for(serie_id)})
 
     async def publishing_test(request: Request):
         if request.method == "GET":
@@ -403,8 +370,8 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             await asyncio.to_thread(publisher.refresh, slug)
             publish = library.read_json(out_dir / "publish.json")
             text = default_text(publish if isinstance(publish, dict) else {})
-            personaje, channel = publisher.video_channel(slug)
-            return JSONResponse({**publisher.state(slug), "default_text": text, "personaje": personaje, "channel": channel,
+            serie, channel = publisher.video_channel(slug)
+            return JSONResponse({**publisher.state(slug), "default_text": text, "serie": serie, "channel": channel,
                                  "default_units": text_units(text), "config": publisher.config()})
         try:
             payload = await _json(request)
@@ -541,12 +508,11 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Route("/api/health", health),
         Route("/api/prompt-preview", prompt_preview, methods=["POST"]),
         Route("/api/suggest", suggest, methods=["POST"]),
-        Route("/api/characters", list_characters),
-        Route("/api/characters", create_character, methods=["POST"]),
-        Route("/api/characters/suggest", suggest_characters, methods=["POST"]),
-        Route("/api/characters/{character_id}", get_character),
-        Route("/api/characters/{character_id}", update_character, methods=["PUT"]),
-        Route("/api/characters/{character_id}", delete_character, methods=["DELETE"]),
+        Route("/api/series", list_series),
+        Route("/api/series", create_serie, methods=["POST"]),
+        Route("/api/series/{serie_id}", get_serie),
+        Route("/api/series/{serie_id}", update_serie, methods=["PUT"]),
+        Route("/api/series/{serie_id}", delete_serie, methods=["DELETE"]),
         Route("/api/jobs", list_jobs),
         Route("/api/jobs", create_job, methods=["POST"]),
         Route("/api/jobs/{job_id}", get_job),
@@ -563,7 +529,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Route("/api/publishing", publishing_config),
         Route("/api/publishing", save_publishing, methods=["PUT"]),
         Route("/api/publishing/channels", publishing_channels),
-        Route("/api/publishing/channels/{character_id}", character_channel, methods=["PUT"]),
+        Route("/api/publishing/channels/{serie_id}", serie_channel, methods=["PUT"]),
         Route("/api/publishing/test", publishing_test, methods=["GET", "POST"]),
         Route("/api/radar", radar_overview),
         Route("/api/radar/config", _radar_action(_radar_config), methods=["PUT"]),
