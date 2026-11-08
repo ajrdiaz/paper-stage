@@ -61,12 +61,14 @@ async def run(req: core.VideoRequest, resume: str | None) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Agente de Radar Studio (videos de 61–70 s).")
+    parser = argparse.ArgumentParser(description="Agente de Radar Studio (videos de 30–45 s o de 61–70 s).")
     parser.add_argument("--tema", help="Tema del video, en el idioma del video.")
     parser.add_argument("--serie", default=None, help="ID de la serie (por defecto: la primera).")
     parser.add_argument("--idioma", choices=core.LANGUAGES, default="",
                         help="Idioma del video (por defecto: el idioma principal de la serie).")
     parser.add_argument("--formato", choices=core.FORMATS, default="vertical")
+    parser.add_argument("--duracion", choices=list(core.DURATIONS), default="corta",
+                        help="corta (30–45 s) o larga (61–70 s, la que pide Creator Rewards).")
     parser.add_argument("--cta", default="", help="Frase final del video (por defecto: la de la serie).")
     parser.add_argument("--slug", default="", help="Carpeta de salida (por defecto: tema + idioma).")
     parser.add_argument("--model", default=core.DEFAULT_MODEL, help=f"Modelo (por defecto: {core.DEFAULT_MODEL}).")
@@ -90,7 +92,7 @@ def main() -> int:
         parser.error("--tema es obligatorio (salvo con --check o --series)")
 
     req = core.VideoRequest(
-        tema=args.tema, idioma=args.idioma, formato=args.formato,
+        tema=args.tema, idioma=args.idioma, formato=args.formato, duracion=args.duracion,
         slug=args.slug, cta=args.cta, model=args.model, effort=args.effort,
         max_turns=args.max_turns, max_budget_usd=args.max_budget_usd,
     )

@@ -4,7 +4,7 @@ Guía para agentes de código que trabajan en este repositorio. Para el uso de l
 
 ## Qué es
 
-Una app web y una CLI lanzan un agente del Claude Agent SDK que produce videos explicativos virales de 61–70 s para público general adulto. Un Radar vigila cuentas de TikTok, ordena sus videos con cifras reales, analiza los mejores y propone nichos e ideas originales. Cada serie (la primera es «Ahora lo entiendes») tiene su nicho, estilo, paleta y voz. Todo corre en local salvo el agente y las lecturas de Apify: voz Kokoro, faster-whisper, `stage.html` renderizado con Playwright, y música y efectos sintetizados por código. El paquete y las variables se siguen llamando `paper_stage` y `PAPER_STAGE_*`.
+Una app web y una CLI lanzan un agente del Claude Agent SDK que produce videos explicativos virales de 30–45 s (5 escenas) o de 61–70 s (7 escenas) para público general adulto. Un Radar vigila cuentas de TikTok, ordena sus videos con cifras reales, analiza los mejores y propone nichos e ideas originales. Cada serie (la primera es «Ahora lo entiendes») tiene su nicho, estilo, paleta y voz. Todo corre en local salvo el agente y las lecturas de Apify: voz Kokoro, faster-whisper, `stage.html` renderizado con Playwright, y música y efectos sintetizados por código. El paquete y las variables se siguen llamando `paper_stage` y `PAPER_STAGE_*`.
 
 El repositorio tiene dos partes que no hay que confundir:
 
@@ -32,7 +32,7 @@ Usa siempre `.venv/bin/python`, porque el `python3` del sistema no tiene Kokoro,
 
 | Ruta | Responsabilidad |
 |---|---|
-| `prompts/system_prompt.md` | Prompt del agente: pipeline de 12 pasos, estructura de 7 escenas, reglas de contenido, de QA y de `publish.json`. Variables: `{{IDIOMA}}`, `{{TEMA}}`, `{{SLUG}}`, `{{FORMATO}}`, `{{CTA}}`, `{{NOTAS}}` y las de la serie: `{{SERIE}}`, `{{SERIE_ID}}`, `{{NICHO}}`, `{{ESTILO}}`, `{{TONO}}`, `{{PRESENTADOR}}`, `{{PALETA}}`, `{{VOZ}}`, `{{LANG_CODE}}`, `{{VOZ_ESTILO}}`, `{{HASHTAG_SERIE}}`, `{{REFERENCIAS}}` y `{{GANCHOS_PREVIOS}}`. |
+| `prompts/system_prompt.md` | Prompt del agente: pipeline de 12 pasos, estructura de 7 escenas, reglas de contenido, de QA y de `publish.json`. Variables: `{{IDIOMA}}`, `{{TEMA}}`, `{{SLUG}}`, `{{FORMATO}}`, `{{CTA}}`, `{{NOTAS}}`, las de la duración: `{{DURACION}}`, `{{ESTRUCTURA}}`, `{{DUR_MIN}}`, `{{DUR_MAX}}`, `{{N_ESCENAS}}`, `{{ESCENA_GIRO}}`, `{{PALABRAS_ES}}`, `{{PALABRAS_EN}}`, y las de la serie: `{{SERIE}}`, `{{SERIE_ID}}`, `{{NICHO}}`, `{{ESTILO}}`, `{{TONO}}`, `{{PRESENTADOR}}`, `{{PALETA}}`, `{{VOZ}}`, `{{LANG_CODE}}`, `{{VOZ_ESTILO}}`, `{{HASHTAG_SERIE}}`, `{{REFERENCIAS}}` y `{{GANCHOS_PREVIOS}}`. |
 | `paper_stage/core.py` | `Serie` (`DEFAULT_SERIE` es la de partida), `VOICES`, `VideoRequest` y su validación, relleno del prompt, `run_agent()` (opciones del SDK, herramientas permitidas y entorno), sugerencia de temas, `slugify`/`topic_key`. |
 | `paper_stage/jobs.py` | `JobStore` y `SerieStore` (SQLite en `data/`) y `JobManager` (`prepare()` copia la serie en la petición): cola, concurrencia, cancelar, reanudar y eventos en vivo (SSE). |
 | `paper_stage/library.py` | Lectura de `output/`: `STEPS` (paso → archivos que lo marcan como hecho), revisión automática de `final.mp4` (`verify`), parecido del guion con sus fuentes (`copied_share`), portada y póster. |
@@ -49,7 +49,7 @@ Variables de entorno útiles: `PAPER_STAGE_OUTPUT`, `PAPER_STAGE_DATA` (redirige
 ## Invariantes (no romper)
 
 - **Prompt ↔ app.** Si cambias los pasos o los archivos de salida en `system_prompt.md`, actualiza `STEPS` en `library.py`, los textos `KICKOFF`/`RESUME` de `core.py` y `demo.py` (que imita la salida real). Si añades una variable `{{X}}`, rellénala en `core.py`: una prueba verifica que no quede ninguna sin rellenar.
-- **Límites de publicación.** `MAX_HASHTAGS`, `MAX_SHORT_DESCRIPTION` y `MAX_TITLE` (`library.py`) deben coincidir con lo que exige §11 del prompt, y `MAX_VOICE_START` y `MAX_HOOK_WORDS`, con el gancho de §2 y §7. Lo mismo vale para la duración (`MIN_DURATION` y `MAX_DURATION`, 61–70 s), las resoluciones, 24 fps, H.264 `yuv420p`, AAC 48 kHz y −14 LUFS ±1.
+- **Límites de publicación.** `MAX_HASHTAGS`, `MAX_SHORT_DESCRIPTION` y `MAX_TITLE` (`library.py`) deben coincidir con lo que exige §11 del prompt, y `MAX_VOICE_START` y `MAX_HOOK_WORDS`, con el gancho de §2 y §7. Lo mismo vale para la duración (`DURATIONS` en `core.py`, que también trae la estructura de escenas y la revisa `verify`), las resoluciones, 24 fps, H.264 `yuv420p`, AAC 48 kHz y −14 LUFS ±1.
 - **El agente trabaja en primer plano.** `AGENT_ENV` desactiva las tareas en segundo plano y `DISALLOWED_TOOLS` bloquea las de «esperar»: al cerrar el turno, el proceso de Claude Code mata lo que siga corriendo, como un render a medias. `agent_env()` pone el `.venv` al frente del `PATH` del agente; no lo quites.
 - **Nunca tocar el Drive real en pruebas ni en demo.** Con `demo=True` el publicador solo usa su carpeta simulada de `data/`, y las pruebas anulan `publishing.drive_roots`. Las claves de `SECRET_ENV` se vacían en el entorno del agente.
 - **Seguridad.** El agente corre con `permission_mode="acceptEdits"` y con `Bash` sin confirmación. Fuera de `127.0.0.1`, la app exige token. Sin token solo acepta un `Host` local, y nunca una escritura con `Origin` de otro sitio (`SameOriginGuard` en `web.py`). No debilites esto.

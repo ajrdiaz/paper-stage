@@ -120,6 +120,22 @@ class CoreTests(unittest.TestCase):
             self.assertIn(text, prompt)
         self.assertIn("full video of the series “Coral”", core.kickoff_prompt(req))
 
+    def test_duration_changes_the_prompt(self):
+        for duracion, scenes, text, absent in (("corta", "5", "30.0 a 45.0 segundos", "61.0"), ("larga", "7", "61.0 a 70.0 segundos", "30.0 a")):
+            with self.subTest(duracion=duracion):
+                req = core.VideoRequest(tema="El hipo", duracion=duracion)
+                req.validate()
+                prompt = core.render_prompt(req.variables())
+                self.assertNotIn("{{", prompt)
+                self.assertIn(text, prompt)
+                self.assertIn(f"con {scenes} escenas y una línea", prompt)
+                self.assertIn(f'"duracion": "{duracion}"', prompt)
+                self.assertNotIn(absent, prompt)
+                self.assertEqual(prompt.count(core.DEFAULT_CTA["es"]) >= 2, True)  # el CTA de dentro de la estructura también se rellena
+        with self.assertRaises(ValueError):
+            core.VideoRequest(tema="El hipo", duracion="eterna").validate()
+        self.assertEqual(core.VideoRequest(tema="El hipo").duracion, "corta")
+
     def test_script_serie(self):
         self.assertEqual(library.script_serie({}), core.DEFAULT_SERIE.id)
         self.assertEqual(library.script_serie({"serie": "Ahora lo entiendes"}), core.DEFAULT_SERIE.id)  # nombre en vez de ID
@@ -202,7 +218,7 @@ class AppTests(unittest.TestCase):
             videos = {v["slug"]: v for v in client.get("/api/videos").json()}
             self.assertIn("los-delfines-es", videos)
             detail = client.get("/api/videos/los-delfines-es").json()
-            self.assertEqual(len(detail["json"]["script.json"]["escenas"]), 7)
+            self.assertEqual(len(detail["json"]["script.json"]["escenas"]), 5)
             self.assertEqual(detail["jobs"][0]["id"], job["id"])
             self.assertEqual([s["key"] for s in detail["steps"]][-4:], ["preqa", "render", "publish", "qa"])
             if shutil.which("ffmpeg"):
@@ -213,7 +229,7 @@ class AppTests(unittest.TestCase):
                 self.assertTrue(checks["5 hashtags"])
                 self.assertTrue(checks["La voz empieza en ≤0.3 s"])  # la voz demo arranca a 0.2 s
                 self.assertTrue(checks["Gancho escrito de 6 palabras como máximo"])
-                self.assertTrue(checks["Duración entre 61 y 70 s"])
+                self.assertTrue(checks["Duración entre 30 y 45 s"])
             self.assertEqual(client.get("/files/los-delfines-es/stage.html").status_code, 200)
             self.assertEqual(client.get("/files/los-delfines-es/../../data/paper_stage.db").status_code, 404)
             self.assertEqual(client.get("/files/los-delfines-es/agent_log.jsonl").status_code, 404)
@@ -340,6 +356,24 @@ class AppTests(unittest.TestCase):
             self.assertEqual(client.delete("/api/series/coral-2").status_code, 200)
             self.assertEqual(client.get("/api/series/coral-2").status_code, 404)
             self.assertIsNone(client.app.state.publisher.channel_for("coral-2"))  # su cuenta no queda huérfana
+
+    def test_long_videos_are_still_checked_as_long(self):
+        with self.make_client(data="data-duration") as client:
+            job = client.post("/api/jobs", json={"tema": "Las ojeras", "duracion": "larga"}).json()
+            job = wait_for(client, job["id"], {"done", "failed"})
+            video = client.get(f"/api/videos/{job['slug']}").json()
+            self.assertEqual(len(video["json"]["script.json"]["escenas"]), 7)
+            if shutil.which("ffmpeg"):
+                self.assertTrue({c["label"]: c["ok"] for c in video["verify"]["checks"]}["Duración entre 61 y 70 s"])
+            # Corregir un video conserva su duración, aunque sea anterior a poder elegirla.
+            script = core.OUTPUT_DIR / job["slug"] / "script.json"
+            data = json.loads(script.read_text())
+            del data["duracion"]
+            script.write_text(json.dumps(data))
+            fix = client.post(f"/api/videos/{job['slug']}/corrections", json={"correcciones": ["x"]}).json()
+            self.assertEqual(fix["request"]["duracion"], "larga")
+            wait_for(client, fix["id"], {"done", "failed"})
+            self.assertEqual(client.post("/api/jobs", json={"tema": "Otro tema", "duracion": "eterna"}).status_code, 400)
 
     def test_review_and_corrections(self):
         with self.make_client(data="data-review") as client:

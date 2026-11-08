@@ -522,7 +522,7 @@ def clean_analysis(data: dict) -> dict:
     return clean
 
 
-NICHES_PROMPT = """Eres investigador de contenido para TikTok en español. Una persona produce con IA videos animados de 60 a 70 segundos, sin presentador ni grabación, para público general adulto. Busca nichos con demanda real en TikTok ahora mismo.{tema}
+NICHES_PROMPT = """Eres investigador de contenido para TikTok en español. Una persona produce con IA videos animados de 30 a 70 segundos, sin presentador ni grabación, para público general adulto. Busca nichos con demanda real en TikTok ahora mismo.{tema}
 
 Usa la búsqueda web: tendencias actuales, cuentas de ese tipo que estén creciendo y qué temas reciben más vistas. Hoy es {hoy}.
 
@@ -559,7 +559,7 @@ async def find_niches(tema: str, context: list[dict]) -> tuple[list[dict], set[s
     return (items if isinstance(items, list) else []), found | {v["url"] for v in context}
 
 
-IDEAS_PROMPT = """Eres guionista jefe de una cuenta de TikTok en español para público general adulto: videos animados de 60 a 70 segundos, sin presentador.
+IDEAS_PROMPT = """Eres guionista jefe de una cuenta de TikTok en español para público general adulto: videos animados de 30 a 70 segundos, sin presentador.
 
 Nicho de la cuenta: {nicho}
 Ángulo propio: {angulo}

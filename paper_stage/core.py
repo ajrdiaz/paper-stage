@@ -48,6 +48,39 @@ VOICES = {
 DEFAULT_VOICES = {"femenina": {"es": "ef_dora", "en": "af_heart"},
                   "masculina": {"es": "em_alex", "en": "am_michael"}}
 FORMATS = ["vertical", "horizontal"]
+_REMATE = ("Una frase memorable que vuelve a la imagen del inicio, para que el loop se sienta continuo, y una invitación a enviarlo a "
+           'una persona concreta que lo vive ("mándaselo a quien…"). Cierra con el CTA exacto, sin cambiarle una palabra: "{{CTA}}"')
+_GANCHO = ("Una frase de 3 s de voz como máximo, de uno de los tipos de abajo. La voz empieza en ≤0.3 s, hay movimiento desde el frame 1 y el "
+           "gancho va también **escrito** en pantalla (`texto_gancho`, §7), porque muchos ven TikTok sin sonido. El espectador debe "
+           "reconocerse: algo que le ha pasado a él o a alguien cercano.")
+_MECANISMO = "Lo invisible hecho visible: la escena más larga y la más espectacular. Es lo que hace que el video se vea dos veces."
+# Corta: la de por defecto, sin requisito de minutos. Larga: Creator Rewards pide más de un minuto.
+DURATIONS = {
+    "corta": {
+        "etiqueta": "30–45 s", "min": 30, "max": 45, "escenas": 5, "giro": 4, "palabras_es": "90–125", "palabras_en": "95–130",
+        "estructura": f"""| # | Tiempo aprox. | Escena | Función |
+|---|---|---|---|
+| 1 | 0–4 s | **El gancho** | {_GANCHO} |
+| 2 | 4–13 s | **Lo que todos creen y lo que pasa** | La explicación popular, su desmentido y la causa real, con una analogía de un objeto cotidiano que se ve en pantalla. **Bucle abierto:** "…y lo más raro viene ahora". |
+| 3 | 13–25 s | **El mecanismo por dentro** | {_MECANISMO} |
+| 4 | 25–36 s | **El giro** | El dato que sorprende, respaldado en `research.md`, que cierra el bucle abierto con el clímax visual y musical. |
+| 5 | 36–45 s | **El remate** | {_REMATE} |
+
+En tan poco tiempo no cabe nada de relleno: una sola idea, una sola analogía y un solo dato.""",
+    },
+    "larga": {
+        "etiqueta": "61–70 s", "min": 61, "max": 70, "escenas": 7, "giro": 6, "palabras_es": "170–195", "palabras_en": "180–205",
+        "estructura": f"""| # | Tiempo aprox. | Escena | Función |
+|---|---|---|---|
+| 1 | 0–5 s | **El gancho** | {_GANCHO} |
+| 2 | 5–14 s | **Lo que todos creen** | La explicación popular, y su desmentido. **Bucle abierto:** "…y lo más raro es lo que pasa al final". |
+| 3 | 14–26 s | **Qué pasa de verdad** | La causa real, con una analogía de un objeto cotidiano que se ve en pantalla. |
+| 4 | 26–40 s | **El mecanismo por dentro** | {_MECANISMO} |
+| 5 | 40–50 s | **El dato que sorprende** | Una cifra o una comparación concreta, respaldada en `research.md`. Micro-gancho: "Y aquí viene lo mejor…" |
+| 6 | 50–60 s | **El giro** | Cierra el bucle abierto de la escena 2 con el clímax visual y musical. Por qué esto le importa al espectador. |
+| 7 | 60–70 s | **El remate** | {_REMATE} |""",
+    },
+}
 ALLOWED_TOOLS = ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"]
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 # El agente corre en un solo turno: cuando lo cierra, el proceso de Claude Code termina
@@ -197,9 +230,10 @@ DEFAULT_SERIE = Serie(
     nombre="Ahora lo entiendes",
     nicho="Por qué tu cuerpo hace lo que hace: curiosidades del día a día",
     estilo=(
-        "Animación digital de aspecto 3D sobre fondo oscuro: un cuerpo humano translúcido y luminoso, con los "
-        "órganos, nervios y fluidos brillando en colores de acento, y objetos cotidianos con volumen. Cámara que "
-        "entra y sale del cuerpo sin cortes, partículas y luz volumétrica. Texto grande y muy legible."
+        "3D real renderizado con Three.js a pantalla completa: un cuerpo humano translúcido con efecto fresnel sobre fondo azul noche "
+        "casi negro, con vasos, nervios y tejidos luminosos de formas orgánicas, piel con volumen, niebla, partículas y luz. La cámara vuela "
+        "sin cortes: entra por la piel, recorre el interior y sale al objeto siguiente. Las analogías son objetos 3D realistas y reconocibles. "
+        "Texto grande y muy legible en HTML encima del 3D."
     ),
     tono=(
         "Directo y cercano, como un amigo que sabe mucho. Frases cortas, humor ligero y analogías con "
@@ -216,6 +250,7 @@ class VideoRequest:
     tema: str
     idioma: str = ""   # vacío: el idioma principal de la serie
     formato: str = "vertical"
+    duracion: str = "corta"
     slug: str = ""
     model: str = DEFAULT_MODEL
     effort: str = "high"
@@ -250,6 +285,8 @@ class VideoRequest:
             raise ValueError(f"Idioma no válido: {self.idioma}")
         if self.formato not in FORMATS:
             raise ValueError(f"Formato no válido: {self.formato}")
+        if self.duracion not in DURATIONS:
+            raise ValueError(f"Duración no válida: {self.duracion}")
         if self.effort not in EFFORTS:
             raise ValueError(f"Esfuerzo no válido: {self.effort}")
         if not re.match(r"^[a-z0-9][a-z0-9.-]{1,63}$", self.model):
@@ -275,7 +312,16 @@ class VideoRequest:
     def variables(self) -> dict[str, str]:
         ficha = self.ficha
         voz = ficha.voces.get(self.idioma) or DEFAULT_VOICES["femenina"][self.idioma]
+        length = DURATIONS[self.duracion]
         return {
+            "ESTRUCTURA": length["estructura"],  # primero: trae dentro otras variables
+            "DURACION": self.duracion,
+            "DUR_MIN": str(length["min"]),
+            "DUR_MAX": str(length["max"]),
+            "N_ESCENAS": str(length["escenas"]),
+            "ESCENA_GIRO": str(length["giro"]),
+            "PALABRAS_ES": length["palabras_es"],
+            "PALABRAS_EN": length["palabras_en"],
             "IDIOMA": self.idioma,
             "TEMA": self.tema,
             "SLUG": self.slug,
@@ -348,11 +394,11 @@ async def suggest_topics(serie: Serie, idioma: str, pista: str, used: list[str],
     """Pide a Claude n ideas de tema del nicho de la serie [{"tema", "gancho"}].
     Quien llama descarta las repetidas."""
     lines = [
-        f"Eres el guionista de «{serie.nombre}»: videos virales de un minuto para público general adulto "
+        f"Eres el guionista de «{serie.nombre}»: videos virales cortos para público general adulto "
         f"sobre este nicho: {serie.nicho}. Tono: {serie.tono}",
         SUGGEST_PROMPT[idioma].format(n=n),
         "Cada tema es una pregunta curiosa de 60 caracteres como máximo, sobre algo que casi todo el mundo "
-        "ha vivido, que se pueda explicar y animar en un minuto. Todos dentro del nicho, pero variados entre sí. "
+        "ha vivido, que se pueda explicar y animar en menos de un minuto. Todos dentro del nicho, pero variados entre sí. "
         "Sin diagnósticos, tratamientos ni temas que asusten.",
     ]
     if pista:

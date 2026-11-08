@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .core import DEFAULT_SERIE, OUTPUT_DIR, SLUG_RE, slugify
+from .core import DEFAULT_SERIE, DURATIONS, OUTPUT_DIR, SLUG_RE, slugify
 
 # Paso del pipeline (§1 del prompt) → archivos que indican que está hecho.
 # "a|b" vale con cualquiera de los dos: los videos anteriores al QA previo no tienen
@@ -207,7 +207,6 @@ def poster(out_dir: Path) -> Path | None:
 
 # Lo que la app comprueba por su cuenta en cada video terminado, sin fiarse de qa.md.
 SIZES = {"vertical": (1080, 1920), "horizontal": (1920, 1080)}
-MIN_DURATION, MAX_DURATION = 61.0, 70.0  # Creator Rewards pide más de un minuto
 MAX_HASHTAGS, MAX_SHORT_DESCRIPTION, MAX_TITLE = 5, 150, 60
 MIN_COPIED_RUN, MAX_COPIED = 5, 0.2  # frases de 5 palabras o más; más del 20 % del guion ya es copiar
 # Gancho (§2 y §7 del prompt): la voz arranca casi en el frame 1 y el gancho escrito es corto.
@@ -261,7 +260,9 @@ def _checks(out_dir: Path) -> list[dict]:
         checks.append({"label": label, "ok": bool(ok), "detail": detail})
 
     total = float((info.get("format") or {}).get("duration") or 0)
-    check(f"Duración entre {MIN_DURATION:.0f} y {MAX_DURATION:.0f} s", MIN_DURATION <= total <= MAX_DURATION, f"{total:.2f} s")
+    # Sin indicar: anterior a poder elegir la duración, de los largos.
+    length = DURATIONS.get((script or {}).get("duracion") if isinstance(script, dict) else None) or DURATIONS["larga"]
+    check(f"Duración entre {length['min']} y {length['max']} s", length["min"] <= total <= length["max"], f"{total:.2f} s")
     size = (v.get("width"), v.get("height"))
     expected = SIZES.get(formato or "", None)
     check("Resolución", size == expected if expected else size in SIZES.values(),

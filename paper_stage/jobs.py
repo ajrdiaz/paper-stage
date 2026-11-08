@@ -279,7 +279,9 @@ class JobManager:
             serie = self.series.get(library.script_serie(script)) or self.series.list()[0]
             previous = {"tema": library.summary(out_dir)["title"], "serie": serie.to_dict(),
                         "idioma": (script or {}).get("idioma") or serie.idioma, "formato": (script or {}).get("formato") or "vertical"}
-        req = core.VideoRequest(**{**previous, "correcciones": correcciones, "slug": slug})
+        # Un video sin duración indicada es anterior a poder elegirla: de los largos.
+        duracion = (library.read_json(out_dir / "script.json") or {}).get("duracion") or previous.get("duracion") or "larga"
+        req = core.VideoRequest(**{**previous, "correcciones": correcciones, "slug": slug, "duracion": duracion})
         req.validate()
         if not req.correcciones:
             raise ValueError("Elige al menos una corrección.")

@@ -45,7 +45,8 @@ LINES = {
     ],
 }
 TITLES = ["El gancho", "Lo que todos creen", "Qué pasa de verdad", "Por dentro", "El dato", "El giro", "El remate"]
-SCENE_LEN = [7, 9, 10, 11, 9, 10, 6.5]
+# Las mismas escenas que pide el prompt para cada duración: (índices de LINES y TITLES, segundos).
+DEMO_SCENES = {"corta": ([0, 2, 3, 5, 6], [5, 8, 11, 8, 5.5]), "larga": (list(range(7)), [7, 9, 10, 11, 9, 10, 6.5])}
 
 
 def _write(path: Path, text: str) -> None:
@@ -96,9 +97,9 @@ def _music_box(path: Path, seconds: float, rate: int = 22050) -> None:
         w.writeframes(bytes(frames))
 
 
-def _timeline() -> list[dict]:
+def _timeline(lengths: list[float]) -> list[dict]:
     t, scenes = 0.0, []
-    for i, length in enumerate(SCENE_LEN):
+    for i, length in enumerate(lengths):
         scenes.append({"n": i + 1, "start": round(t, 2), "end": round(t + length, 2)})
         t += length
     return scenes
@@ -196,8 +197,9 @@ async def run_demo(
 ) -> AsyncIterator[dict]:
     out = req.out_dir
     out.mkdir(parents=True, exist_ok=True)
-    lines = [line.format(tema=req.tema, cta=req.cta) for line in LINES[req.idioma]]
-    timeline = _timeline()
+    picks, lengths = DEMO_SCENES[req.duracion]
+    lines = [LINES[req.idioma][i].format(tema=req.tema, cta=req.cta) for i in picks]
+    timeline = _timeline(lengths)
     duration = timeline[-1]["end"]
     words = _words(lines, timeline)
     title = req.tema[:40]
@@ -223,16 +225,16 @@ async def run_demo(
             f"# Biblia visual\n\n## ESTILO\n{ficha.nombre}: {ficha.estilo}\n\n## PRESENTADOR\n"
             f"{ficha.presentador or 'Sin presentador.'}\n\n## TONO\n{ficha.tono}\n"), None),
         ("Write", "script.json", lambda: _write(out / "script.json", json.dumps({
-            "idioma": req.idioma, "formato": req.formato, "serie": ficha.id, "titulo": title,
+            "idioma": req.idioma, "formato": req.formato, "duracion": req.duracion, "serie": ficha.id, "titulo": title,
             "tipo_gancho": "pregunta imposible", "gancho": lines[0],
             "texto_gancho": " ".join(title.split()[:MAX_HOOK_WORDS]), "bucle_abierto": "lo más raro, al final",
-            "escenas": [{"n": i + 1, "titulo": TITLES[i], "vo": line,
+            "escenas": [{"n": i + 1, "titulo": TITLES[picks[i]], "vo": line,
                          "visual": "Escena de ejemplo", "transition": "La cámara entra en el objeto…"}
                         for i, line in enumerate(lines)],
         }, ensure_ascii=False, indent=2)), "Escribo el guion en 7 escenas."),
         ("Bash", "Generar la voz con Kokoro (escenas 1–7)", lambda: [
             _silence(out / "audio" / f"scene_{i + 1:02d}.wav", length - 0.5)
-            for i, length in enumerate(SCENE_LEN)], None),
+            for i, length in enumerate(lengths)], None),
         ("Write", "timeline.json", lambda: _write(out / "timeline.json",
             json.dumps({"duration": duration, "scenes": timeline}, indent=2)), None),
         ("Bash", "voice.wav, faster-whisper → words.json y envolvente → mouth.json", lambda: (
@@ -246,7 +248,7 @@ async def run_demo(
         ("Bash", "Sintetizar música y efectos, mezclar a −14 LUFS",
          lambda: _music_box(out / "mix.wav", duration), None),
         ("Write", "qa_previo.md", lambda: _write(out / "qa_previo.md",
-            "# QA previo (demo)\n\n- [x] Escenas entre 61.0 y 70.0 s\n- [x] Subtítulos debajo del escenario\n"
+            "# QA previo (demo)\n\n- [x] Escenas en la duración pedida\n- [x] Subtítulos debajo del escenario\n"
             "- [ ] Voz real (el modo demo usa silencio)\n"), None),
         ("Bash", "Render con Playwright + ffmpeg → final.mp4", lambda: _fake_mp4(out, duration, req), None),
         ("Write", "publish.json", lambda: _write(out / "publish.json", json.dumps({

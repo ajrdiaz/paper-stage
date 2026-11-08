@@ -337,7 +337,7 @@ function studioForm(prefs, chars) {
         <button type="button" class="btn small" id="suggest-open" aria-expanded="false" aria-controls="suggest-panel">Sugerir 3 temas</button></div>
       <input id="tema" name="tema" type="text" class="tema-input" maxlength="200" autocomplete="off"
         placeholder="Ej.: ¿Por qué se te duerme una pierna?" value="${esc(prefs.tema || "")}">
-      <span class="hint">Escríbelo en el idioma del video. El agente investiga, escribe el guion, anima y renderiza 61–70 s. Los temas no se repiten dentro de una serie.</span>
+      <span class="hint">Escríbelo en el idioma del video. El agente investiga, escribe el guion, anima y renderiza. Los temas no se repiten dentro de una serie.</span>
       <div id="suggest-panel" class="suggest-panel hidden">
         <div class="row">
           <input id="pista" type="text" maxlength="120" autocomplete="off" aria-label="Sobre qué (opcional)" placeholder="Sobre qué (opcional): sueño, piel, hambre…">
@@ -365,6 +365,13 @@ function studioForm(prefs, chars) {
           <label><input type="radio" name="formato" value="horizontal" ${prefs.formato === "horizontal" ? "checked" : ""}><span><i class="ratio h"></i>16:9</span></label>
         </div>
       </div>
+    </div>
+    <div class="field">
+      <span class="label">Duración</span>
+      <div class="segmented" role="radiogroup" aria-label="Duración">
+        ${Object.entries(CONFIG.durations).map(([k, label]) => `<label><input type="radio" name="duracion" value="${k}" ${prefs.duracion === k ? "checked" : ""}><span>${label}</span></label>`).join("")}
+      </div>
+      <span class="hint">Corta: más rápida de producir y sin requisitos. Larga: la que pide Creator Rewards de TikTok, cuando llegues a sus requisitos.</span>
     </div>
     <div class="field">
       <label for="notas">Indicaciones para el agente <span class="small muted">(opcional)</span></label>
@@ -403,7 +410,7 @@ function studioForm(prefs, chars) {
 
 function readForm(form) {
   const data = Object.fromEntries(new FormData(form).entries());
-  const prefs = { serie_id: data.serie_id, idioma: data.idioma, formato: data.formato,
+  const prefs = { serie_id: data.serie_id, idioma: data.idioma, formato: data.formato, duracion: data.duracion,
                   model: data.model, effort: data.effort, max_turns: data.max_turns, max_budget_usd: data.max_budget_usd || null };
   const cta = (data.cta || "").trim();
   savePrefs({ ...loadPrefs(), ...prefs, [ctaKey(data.serie_id, data.idioma)]: cta });
@@ -411,13 +418,13 @@ function readForm(form) {
 }
 
 function studioIntro(c) {
-  return c ? `Escribe un tema o elige una idea del <a href="#/radar?tab=ideas">Radar</a> y el agente produce un video de un minuto para «${esc(c.nombre)}». Su nicho: <strong>${esc(c.nicho)}</strong>.` : "";
+  return c ? `Escribe un tema o elige una idea del <a href="#/radar?tab=ideas">Radar</a> y el agente produce un video corto para «${esc(c.nombre)}». Su nicho: <strong>${esc(c.nicho)}</strong>.` : "";
 }
 
 async function renderStudio(params) {
   await loadSeries();
   const saved = loadPrefs();
-  const prefs = { idioma: "es", formato: "vertical", model: CONFIG.default_model, effort: "high", ...saved,
+  const prefs = { idioma: "es", formato: "vertical", duracion: "corta", model: CONFIG.default_model, effort: "high", ...saved,
                   tema: params.get("tema") || "", notas: params.get("notas") || "" };
   // Los videos del Radar que inspiraron la idea: para avisar si el guion se les parece demasiado.
   const inspiracion = (params.get("fuentes") || "").split(",").filter(Boolean);
@@ -570,7 +577,7 @@ async function renderJob(jobId) {
   view.innerHTML = `
     <div class="page-head">
       <div><p class="small"><a href="#/">← Estudio</a></p><h1>${esc(req.tema)}</h1>
-        <p>${esc(reqSerie(req).nombre)} · ${esc(LANG[req.idioma])} · ${req.formato === "horizontal" ? "16:9" : "9:16"} · ${esc(req.model)} (${esc(req.effort)}) · <code>output/${esc(job.slug)}/</code></p></div>
+        <p>${esc(reqSerie(req).nombre)} · ${esc(LANG[req.idioma])} · ${req.formato === "horizontal" ? "16:9" : "9:16"} · ${esc(CONFIG.durations[req.duracion] || "61–70 s")} · ${esc(req.model)} (${esc(req.effort)}) · <code>output/${esc(job.slug)}/</code></p></div>
       <div class="row" id="job-actions"></div>
     </div>
     <div class="stack">
