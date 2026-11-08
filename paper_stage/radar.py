@@ -448,14 +448,17 @@ async def ask_claude(content: str | list, tools: list[str] | None = None, max_tu
 
 
 def _extract_json(text: str, opening: str) -> object:
-    closing = {"[": "]", "{": "}"}[opening]
-    start, end = text.find(opening), text.rfind(closing)
-    if start < 0 or end <= start:
-        raise RadarError("Claude no devolvió el formato esperado. Prueba otra vez.")
-    try:
-        return json.loads(text[start:end + 1])
-    except ValueError as exc:
-        raise RadarError("Claude no devolvió el formato esperado. Prueba otra vez.") from exc
+    """Primer JSON completo del texto. Claude puede escribir antes una frase y, tras buscar en la
+    web, añadir después sus fuentes como enlaces Markdown, llenos de corchetes."""
+    decoder, start = json.JSONDecoder(), text.find(opening)
+    while start >= 0:
+        with contextlib.suppress(ValueError):
+            value = decoder.raw_decode(text, start)[0]
+            if value:  # «[]» o «[1]» en una frase de introducción no son la respuesta
+                if opening != "[" or any(isinstance(item, dict) for item in value):
+                    return value
+        start = text.find(opening, start + 1)
+    raise RadarError("Claude no devolvió el formato esperado. Prueba otra vez.")
 
 
 ANALYSIS_PROMPT = """Analiza este video de TikTok para entender por qué funcionó. El objetivo es aprender el patrón y crear videos propios distintos, no copiarlo.

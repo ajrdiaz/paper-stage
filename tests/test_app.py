@@ -663,6 +663,19 @@ class RadarUnitTests(unittest.TestCase):
         stats = radar.account_stats([v for v in ranked.values() if v["handle"] == "a"])
         self.assertEqual((stats["window_videos"], stats["median_views"], stats["viral_videos"]), (5, 250, 2))
 
+    def test_json_is_found_among_other_text(self):
+        niches = [{"nicho": "Coches", "senales": [{"url": "https://a.example/[x]"}]}]
+        answer = json.dumps(niches, ensure_ascii=False)
+        # Así respondió Claude tras buscar en la web: el JSON y luego sus fuentes en Markdown.
+        sources = "\n\nSources:\n- [TikTok 2026](https://a.example/x)\n- [Nichos](https://b.example/y)"
+        for text in (answer, answer + sources, f"Según [1] y []:\n```json\n{answer}\n```" + sources):
+            with self.subTest(text=text[:30]):
+                self.assertEqual(radar._extract_json(text, "["), niches)
+        self.assertEqual(radar._extract_json('Aquí va: {"tema": "x"} y fin {nota}', "{"), {"tema": "x"})
+        for bad in ("", "No encontré nada.", "Mira [1] y [2]", '[{"nicho": "cortado"'):
+            with self.subTest(bad=bad), self.assertRaises(radar.RadarError):
+                radar._extract_json(bad, "[")
+
     def test_niches_only_keep_links_from_the_search(self):
         items = [
             {"nicho": "Con prueba", "puntaje": 9, "cuentas": ["@Real.Cuenta", "no vale!"],
