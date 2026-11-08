@@ -119,11 +119,11 @@ def measured_suggestions(data: dict) -> list[dict]:
             continue  # Whisper añade muletillas: una palabra de más no es un error del guion
         add("alta" if len(d["esperado"].split()) <= 3 else "media", d["t"], "audio",
             f"El guion dice «{d['esperado'] or '(nada)'}», pero se transcribe «{d['oido'] or '(nada)'}». Quizá se pronuncia mal o se corta.",
-            f"Escucha el segundo {d['t']}: si «{d['esperado']}» no se entiende, regenera esa frase del TTS con otra grafía o una pausa antes, "
-            "sin recortar el inicio de la palabra, y rehaz voz, sincronía, mezcla y render.")
+            f"Regenera la frase del segundo {d['t']} con otra grafía o una pausa antes, sin recortar el inicio de «{d['esperado']}», hasta que "
+            "la transcripción coincida con el guion, y rehaz sincronía, mezcla y render. Si la palabra ya se oye bien, descarta esta corrección.")
     for w in data.get("inseguras", []):
         add("baja", w["t"], "audio", f"«{w['word']}» se transcribe con poca seguridad ({w['prob']:.0%}).",
-            f"Escucha el segundo {w['t']} y, si se entiende mal, cambia esa frase.")
+            f"Si en el segundo {w['t']} no se entiende, cambia esa frase hasta que la transcripción salga segura.")
     pace = data.get("palabras_minuto")
     if pace and not MIN_PACE <= pace <= MAX_PACE:
         add("media", 0, "ritmo", f"La narración va a {pace} palabras por minuto (cómodo: {MIN_PACE}–{MAX_PACE}).",

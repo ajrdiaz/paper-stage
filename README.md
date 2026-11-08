@@ -20,7 +20,7 @@ source .venv/bin/activate
 python run_agent.py --check
 ```
 
-El agente necesita credenciales de Claude: `ANTHROPIC_API_KEY`, o una sesión de Claude Code ya iniciada.
+El agente necesita credenciales de Claude: una sesión de Claude Code ya iniciada, que consume de tu suscripción (no se cobra aparte), o `ANTHROPIC_API_KEY`, que se paga por uso. Las cifras en dólares de cada trabajo son lo que costaría a precio de API; con suscripción, el límite real son los de tu plan.
 
 ## Aplicación web
 

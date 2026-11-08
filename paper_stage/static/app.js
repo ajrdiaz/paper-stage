@@ -385,9 +385,9 @@ function studioForm(prefs, chars) {
           <select id="effort" name="effort">${CONFIG.efforts.map(e => `<option ${prefs.effort === e ? "selected" : ""}>${e}</option>`).join("")}</select></div>
       </div>
       <div class="fields-2">
-        <div class="field"><label for="budget">Tope de gasto (USD)</label>
+        <div class="field"><label for="budget">Tope de consumo (USD equivalentes)</label>
           <input id="budget" name="max_budget_usd" type="number" min="0.5" max="1000" step="0.5" placeholder="Sin tope" value="${esc(prefs.max_budget_usd ?? "")}">
-          <span class="hint">Si se alcanza, el trabajo se detiene y puedes reanudarlo.</span></div>
+          <span class="hint">Medido a precio de API. Con una suscripción de Claude no se cobra aparte: consume de tu plan. Si se alcanza, el trabajo se detiene y puedes reanudarlo.</span></div>
         <div class="field"><label for="turns">Máximo de turnos</label>
           <input id="turns" name="max_turns" type="number" min="10" max="2000" step="10" value="${esc(prefs.max_turns ?? 400)}"></div>
       </div>
@@ -598,7 +598,7 @@ async function renderJob(jobId) {
     $("#job-status").innerHTML = pill(j.status) + tiktokPill(j.tiktok) + (j.queue_position ? ` <span class="small muted">puesto ${j.queue_position} en la cola</span>` : "");
     const end = j.finished_at || (ACTIVE.has(j.status) ? Date.now() / 1000 : null);
     const elapsed = j.started_at && end ? fmtTime(end - j.started_at) : "—";
-    $("#job-meta").textContent = `Tiempo: ${elapsed} · Turnos: ${j.turns || 0} · Costo: ${fmtCost(j.cost_usd)}`;
+    $("#job-meta").textContent = `Tiempo: ${elapsed} · Turnos: ${j.turns || 0} · Equivalente en API: ${fmtCost(j.cost_usd)}`;
     $("#job-steps").innerHTML = stepsHtml(j.steps, j.status === "running");
     const err = $("#job-error");
     err.classList.toggle("hidden", !j.error);
@@ -907,7 +907,7 @@ async function renderVideo(slug) {
       const own = $("#own-fix", bodyEl).value.trim();
       const correcciones = [...picked, ...(own ? [own] : [])];
       if (!correcciones.length) { toast("Elige al menos una corrección.", "err"); return; }
-      if (!confirmAction(`¿Aplicar ${correcciones.length} corrección(es)? El agente trabaja sobre este mismo video y gastará crédito de Claude; guarda una copia antes.`)) return;
+      if (!confirmAction(`¿Aplicar ${correcciones.length} corrección(es)? El agente trabaja sobre este mismo video, guarda una copia antes y consume de tu plan de Claude.`)) return;
       try {
         const job = await api(`/api/videos/${encodeURIComponent(v.slug)}/corrections`, { method: "POST", body: { correcciones } });
         watched.set(job.id, job.status);
