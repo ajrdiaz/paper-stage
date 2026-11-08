@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import time
 import unittest
@@ -21,9 +22,9 @@ os.environ["PAPER_STAGE_DEMO_DELAY"] = "0.01"
 from starlette.testclient import TestClient  # noqa: E402
 
 from paper_stage import core, library  # noqa: E402
-from paper_stage.demo import run_demo  # noqa: E402
+from paper_stage.demo import analyze_demo, demo_radar_source, find_niches_demo, run_demo  # noqa: E402
 from paper_stage.jobs import JobManager  # noqa: E402
-from paper_stage import publishing  # noqa: E402
+from paper_stage import publishing, radar  # noqa: E402
 
 # Las pruebas nunca deben escribir en el Google Drive real de quien las ejecuta.
 publishing.drive_roots = lambda: []
@@ -618,6 +619,230 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(core.agent_env()["PAPER_STAGE_BUFFER_KEY"], "")
         finally:
             del os.environ["PAPER_STAGE_BUFFER_KEY"]
+
+
+def radar_row(handle, video_id, views, pinned=False, created=None):
+    return {"id": video_id, "handle": handle, "views": views, "pinned": pinned, "duration": 65,
+            "created_at": created or time.time() - 86400}
+
+
+class RadarUnitTests(unittest.TestCase):
+    def test_handles_and_counts(self):
+        for text in ("https://www.tiktok.com/@ImportaCrew?lang=es", "@importacrew", " importacrew "):
+            self.assertEqual(radar.parse_handle(text), "importacrew")
+        for bad in ("", "a", "no vale con espacios", "https://evil.example/x y"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                radar.parse_handle(bad)
+        self.assertEqual([radar.parse_count(t) for t in ("5.1M", "132,9 K", "8285", "", None)],
+                         [5_100_000, 132_900, 8285, 0, 0])
+        # El ID de un video guarda su fecha (video real de @nuncateloexplicaron, del 2026-11-07).
+        self.assertEqual(time.gmtime(radar.video_time("7705573604842360096"))[:3], (2026, 11, 7))
+
+    def test_ranking_is_arithmetic(self):
+        now = time.time()
+        rows = [radar_row("a", "1", 100), radar_row("a", "2", 200), radar_row("a", "3", 300),
+                radar_row("a", "4", 900_000), radar_row("a", "5", 50_000_000, pinned=True),
+                radar_row("b", "6", 500_000), radar_row("c", "7", 700), radar_row("c", "8", 800), radar_row("c", "9", 2700)]
+        ranked = {v["id"]: v for v in radar.rank_videos(rows, {"4": [(now - 7200, 800_000), (now, 900_000)]}, now)}
+        # Mediana de «a» = 250: el fijado no cuenta, aunque sí se le calcula su múltiplo.
+        self.assertEqual(ranked["4"]["multiple"], 3600.0)
+        self.assertTrue(ranked["4"]["viral"])
+        self.assertEqual(ranked["4"]["velocity"], 1_200_000)
+        self.assertIsNone(ranked["1"]["velocity"])
+        self.assertIsNone(ranked["6"]["multiple"])    # con un solo video no hay mediana
+        self.assertFalse(ranked["6"]["viral"])
+        self.assertEqual(ranked["9"]["multiple"], 3.4)  # 3× o más, pero pocas vistas: no es viral
+        self.assertFalse(ranked["9"]["viral"])
+        self.assertEqual(radar.rank_videos(rows, {}, now)[0]["id"], "5")  # los virales, primero
+        stats = radar.account_stats([v for v in ranked.values() if v["handle"] == "a"])
+        self.assertEqual((stats["window_videos"], stats["median_views"], stats["viral_videos"]), (5, 250, 2))
+
+    def test_niches_only_keep_links_from_the_search(self):
+        items = [
+            {"nicho": "Con prueba", "puntaje": 9, "cuentas": ["@Real.Cuenta", "no vale!"],
+             "senales": [{"detalle": "a", "url": "https://real.example/x/"}]},
+            {"nicho": "Enlace inventado", "puntaje": 9, "senales": [{"detalle": "b", "url": "https://inventado.example"}]},
+            {"nicho": "Enlace peligroso", "puntaje": 7, "senales": [{"detalle": "c", "url": "javascript:alert(1)"}]},
+            {"nicho": "", "puntaje": 10}, "no es un objeto",
+            {"nicho": "Puntaje raro", "puntaje": "mucho"},
+        ]
+        niches = {n["nicho"]: n for n in radar.clean_niches(items, {"https://real.example/x"})}
+        self.assertEqual(niches["Con prueba"]["puntaje"], 9)
+        self.assertEqual(niches["Con prueba"]["cuentas"], ["real.cuenta"])
+        self.assertEqual(niches["Enlace inventado"]["puntaje"], 6)
+        self.assertEqual(niches["Enlace inventado"]["senales"][0]["url"], "")
+        self.assertEqual(niches["Enlace peligroso"]["senales"][0]["url"], "")
+        self.assertEqual(niches["Puntaje raro"]["puntaje"], 1)
+        self.assertEqual(len(niches), 4)
+
+    def test_apify_source(self):
+        calls = []
+
+        def http(method, url, headers, body, timeout):
+            calls.append((url, headers, json.loads(body)))
+            return 200, json.dumps([
+                {"id": "7705573604842360096", "text": "Hola", "createTime": 1800000000, "playCount": 1500, "diggCount": 10,
+                 "commentCount": 2, "shareCount": 3, "collectCount": 4, "isPinned": True,
+                 "authorMeta": {"name": "UnaCuenta", "fans": 99, "video": 7},
+                 "videoMeta": {"duration": 65, "coverUrl": "https://cdn.example/c.jpg"}},
+                {"error": "fila de error sin id", "authorMeta": {"name": "unacuenta"}},
+                {"id": "7705573604842360097", "authorMeta": {"name": "otra-que-no-pedi"}},
+            ]).encode()
+
+        result = radar.apify_source("clave-secreta", http)(["unacuenta"], lambda _: None)
+        self.assertNotIn("clave-secreta", calls[0][0])  # la clave no va en la URL
+        self.assertEqual(calls[0][1]["Authorization"], "Bearer clave-secreta")
+        self.assertFalse(calls[0][2]["shouldDownloadVideos"])  # lo que cobra aparte, apagado
+        self.assertEqual((result["unacuenta"]["followers"], len(result["unacuenta"]["videos"])), (99, 1))
+        video = result["unacuenta"]["videos"][0]
+        self.assertEqual((video["views"], video["saves"], video["duration"], video["pinned"]), (1500, 4, 65, True))
+        for status, text in ((401, "rechazó la clave"), (402, "crédito")):
+            with self.subTest(status=status), self.assertRaises(radar.RadarError) as ctx:
+                radar.apify_source("clave", lambda *a: (status, b""))(["x1"], lambda _: None)
+            self.assertIn(text, str(ctx.exception))
+
+    def test_apify_token_only_goes_to_apify(self):
+        seen = {}
+
+        def http(method, url, headers, body, timeout):
+            if method == "POST":
+                return 200, json.dumps([{"id": "123456", "mediaUrls": ["https://cdn.example/v.mp4"]}]).encode()
+            seen.update(url=url, headers=headers)
+            return 200, b"\x00\x00\x00\x18ftypmp42"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "v.mp4"
+            self.assertTrue(radar.apify_video_fetcher("clave", http)({"id": "123456", "url": "u"}, dest))
+            self.assertTrue(dest.exists())
+        self.assertNotIn("Authorization", seen["headers"])
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "hace falta ffmpeg")
+    def test_video_frames(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "v.mp4"
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=64x64:r=24:d=10",
+                            "-pix_fmt", "yuv420p", str(video)], check=True, capture_output=True)
+            frames = radar.video_frames(video, Path(tmp))
+        self.assertEqual(len(frames), 5)
+        self.assertTrue(frames[0].startswith(b"\xff\xd8\xff"))
+
+
+class RadarApiTests(unittest.TestCase):
+    def client(self, data, **parts):
+        manager = JobManager(TMP / data, runner=run_demo)
+        parts = {"source": demo_radar_source, "analyzer": analyze_demo, "niche_finder": find_niches_demo, **parts}
+        box = radar.Radar(manager.store.db, manager.data_dir, **parts)
+        return TestClient(create_app(manager, token="", radar=box), base_url="http://127.0.0.1")
+
+    def wait(self, client, done, timeout=20):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            state = client.get("/api/radar").json()
+            if done(state):
+                return state
+            time.sleep(0.02)
+        raise AssertionError(f"no terminó: {state}")
+
+    def test_scan_analyze_and_patterns(self):
+        with self.client("data-radar") as client:
+            state = client.get("/api/radar").json()
+            self.assertEqual([a["handle"] for a in state["accounts"]], radar.DEFAULT_ACCOUNTS)
+            self.assertEqual(state["videos"], [])
+
+            self.assertEqual(client.post("/api/radar/accounts", json={"handle": "no vale"}).status_code, 400)
+            res = client.post("/api/radar/accounts", json={"handle": "https://www.tiktok.com/@otra.cuenta"})
+            self.assertIn("otra.cuenta", [a["handle"] for a in res.json()["accounts"]])
+            client.post("/api/radar/accounts", json={"handle": "@otra.cuenta"})  # no se duplica
+            self.assertEqual(client.delete("/api/radar/accounts/otra.cuenta").status_code, 200)
+
+            client.post("/api/radar/scan", json={})
+            state = self.wait(client, lambda s: not s["scanning"])
+            self.assertEqual(state["scan"]["state"], "done", state["scan"])
+            self.assertEqual(len(state["videos"]), 36)
+            top = state["videos"][0]
+            self.assertTrue(top["viral"] and top["pinned"] and top["url"].startswith("https://www.tiktok.com/@"))
+            self.assertEqual(state["patterns"]["virales"], 3)
+
+            self.assertEqual(client.post("/api/radar/videos/123456/analyze").status_code, 404)
+            self.assertEqual(client.post("/api/radar/videos/..%2F..%2Fx/analyze").status_code, 404)
+            client.post(f"/api/radar/videos/{top['id']}/analyze")
+            state = self.wait(client, lambda s: not s["videos"][0]["analyzing"] and s["videos"][0]["analysis"])
+            analysis = state["videos"][0]["analysis"]
+            self.assertTrue(analysis["parcial"])  # sin video descargado, lo dice
+            self.assertEqual(state["patterns"]["ganchos"][0]["valor"], "afirmación que parece falsa")
+
+            # Quitar una cuenta borra lo suyo.
+            client.delete(f"/api/radar/accounts/{top['handle']}")
+            state = client.get("/api/radar").json()
+            self.assertEqual(len(state["videos"]), 24)
+            self.assertEqual(state["patterns"]["analizados"], 0)
+
+    def test_failures_are_readable_and_per_account(self):
+        def source(handles, progress):
+            return {"importacrew": {"error": "TikTok pidió verificar."},
+                    "ingenioculto": demo_radar_source(["ingenioculto"], progress)["ingenioculto"]}
+
+        with self.client("data-radar-fail", source=source) as client:
+            client.post("/api/radar/scan", json={})
+            state = self.wait(client, lambda s: not s["scanning"])
+            errors = {a["handle"]: a["last_error"] for a in state["accounts"]}
+            self.assertEqual(errors["importacrew"], "TikTok pidió verificar.")
+            self.assertIn("No devolvió videos", errors["nuncateloexplicaron"])
+            self.assertIsNone(errors["ingenioculto"])
+            self.assertEqual(state["scan"]["state"], "done")
+            self.assertIn("2 cuenta(s) con error", state["scan"]["step"])
+
+        def broken(handles, progress):
+            raise radar.RadarError("Apify rechazó la clave.")
+
+        with self.client("data-radar-broken", source=broken) as client:
+            client.post("/api/radar/scan", json={})
+            state = self.wait(client, lambda s: not s["scanning"])
+            self.assertEqual(state["scan"], {"state": "failed", "step": "Apify rechazó la clave."})
+
+    def test_niches(self):
+        with self.client("data-radar-niches") as client:
+            client.post("/api/radar/niches", json={"tema": "coches"})
+            self.assertEqual(client.post("/api/radar/niches", json={}).status_code, 409)  # una a la vez
+            state = self.wait(client, lambda s: s["niche_runs"][0]["status"] != "running")
+            run = state["niche_runs"][0]
+            self.assertEqual((run["status"], run["tema"]), ("done", "coches"))
+            scores = {n["nicho"]: n["puntaje"] for n in run["nichos"]}
+            self.assertEqual(scores["La ciencia de lo que comes cada día"], 6)  # sin enlace, baja
+            self.assertEqual(run["nichos"][0]["puntaje"], 9)
+
+    def test_apify_key_never_reaches_the_browser(self):
+        manager = JobManager(TMP / "data-radar-key", runner=run_demo)
+        box = radar.Radar(manager.store.db, manager.data_dir)
+        with TestClient(create_app(manager, token="", radar=box), base_url="http://127.0.0.1") as client:
+            self.assertEqual(client.get("/api/radar").json()["config"]["source"], "sesion")
+            self.assertEqual(client.put("/api/radar/config", json={"apify_token": "corta"}).status_code, 409)
+            res = client.put("/api/radar/config", json={"apify_token": "apify_api_secreta1234"})
+            self.assertNotIn("apify_api_secreta", res.text)
+            self.assertEqual(res.json()["config"]["apify_hint"], "…1234")
+            self.assertEqual(res.json()["config"]["source"], "apify")
+        os.environ["PAPER_STAGE_APIFY_TOKEN"] = "secreta"
+        try:
+            self.assertEqual(core.agent_env()["PAPER_STAGE_APIFY_TOKEN"], "")
+        finally:
+            del os.environ["PAPER_STAGE_APIFY_TOKEN"]
+
+    def test_cover_route_only_serves_covers(self):
+        with self.client("data-radar-cover") as client:
+            box = client.app.state.radar
+            (box.covers_dir / "123456.jpg").write_bytes(b"\xff\xd8\xff")
+            self.assertEqual(client.get("/radar/cover/123456.jpg").status_code, 200)
+            self.assertEqual(client.get("/radar/cover/999999.jpg").status_code, 404)
+            self.assertEqual(client.get("/radar/cover/..%2F..%2Fpaper_stage.db.jpg").status_code, 404)
+
+    def test_cover_download_rejects_non_images(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "c.jpg"
+            radar._save_cover(path, "http://cdn.example/c.jpg", lambda *a: (200, b"\xff\xd8\xff"))  # sin https
+            radar._save_cover(path, "https://cdn.example/c.jpg", lambda *a: (200, b"<html>"))
+            self.assertFalse(path.exists())
+            radar._save_cover(path, "https://cdn.example/c.jpg", lambda *a: (200, b"\xff\xd8\xffdatos"))
+            self.assertTrue(path.exists())
 
 
 class ShutdownTests(unittest.IsolatedAsyncioTestCase):

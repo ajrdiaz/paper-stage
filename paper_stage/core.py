@@ -31,7 +31,7 @@ VENDOR_DIR = ROOT / "assets" / "vendor"
 VENDOR_FILES = ["gsap.min.js", "MorphSVGPlugin.min.js", "CustomEase.min.js"]
 
 DEFAULT_MODEL = "claude-opus-5-5"
-MODELS = ["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5"]
+MODELS = ["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-sonnet-5"]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 LANGUAGES = ["es", "en"]
 LANGUAGE_NAMES = {"es": "español", "en": "inglés"}
@@ -59,7 +59,7 @@ AGENT_ENV = {
     "BASH_MAX_TIMEOUT_MS": str(2 * 60 * 60 * 1000),
 }
 DISALLOWED_TOOLS = ["ScheduleWakeup", "Monitor", "CronCreate", "RemoteTrigger"]
-SECRET_ENV = ["PAPER_STAGE_TOKEN", "PAPER_STAGE_BUFFER_KEY"]
+SECRET_ENV = ["PAPER_STAGE_TOKEN", "PAPER_STAGE_BUFFER_KEY", "PAPER_STAGE_APIFY_TOKEN"]
 
 
 def agent_env() -> dict[str, str]:

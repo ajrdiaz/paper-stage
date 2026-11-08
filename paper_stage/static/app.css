@@ -333,6 +333,29 @@ details.advanced .fields-3, details.advanced .fields-2 { margin-top: 12px; }
 .pub-history { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .pub-status { display: flex; gap: 10px; align-items: baseline; }
 
+/* ------------------------------------------------------------ radar */
+.radar-card .thumb { aspect-ratio: 9 / 12; text-decoration: none; }
+.radar-card:hover { transform: none; }
+.radar-card .thumb .ph { font-family: var(--body); font-size: .95rem; font-weight: 500; }
+.radar-numbers { gap: 6px; }
+.radar-views { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.radar-filters select { width: auto; flex: 1 1 170px; }
+.radar-input { flex: 1; min-width: 200px; width: auto; border: 2px solid var(--line); background: var(--paper); border-radius: 12px; padding: 10px 12px; min-height: 44px; }
+.radar-status { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; }
+.radar-table-wrap { overflow-x: auto; }
+.radar-table th { text-align: left; padding: 8px 4px; font-size: .85rem; color: var(--ink-3); border-bottom: 2px solid var(--line); white-space: nowrap; }
+.radar-table td { text-align: left; color: inherit; vertical-align: top; }
+.radar-table td:last-child { text-align: right; }
+.radar-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.radar-stats .card { display: flex; flex-direction: column; gap: 2px; padding: 14px; }
+.radar-stats strong { font-size: 1.6rem; font-weight: 700; }
+.radar-patterns { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.radar-run { border-top: 1px dashed var(--line); padding-top: 12px; }
+.radar-run summary { cursor: pointer; margin-bottom: 12px; }
+.radar-niche { gap: 8px; padding: 16px; box-shadow: none; }
+.radar-niche p { margin: 0; }
+.radar-signals { margin: 0; padding-left: 18px; }
+
 /* ------------------------------------------------------------ detalle de video */
 .video-layout { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 28px; align-items: start; }
 @media (max-width: 900px) { .video-layout { grid-template-columns: 1fr; } }
@@ -406,10 +429,10 @@ dialog::backdrop { background: rgba(20, 27, 51, .55); }
 @media (max-width: 640px) {
   .topbar { flex-wrap: wrap; gap: 8px; padding: 10px 16px; }
   .brand span { font-size: 1.55rem; white-space: nowrap; }
-  .tabs { width: 100%; }
+  .tabs { width: 100%; flex-wrap: wrap; }
   .account-picker { margin-left: 0; order: 3; width: 100%; }
   .account-picker select { flex: 1; max-width: none; }
-  .tabs a { flex: 1; text-align: center; padding: 6px 8px; }
+  .tabs a { flex: 1 0 auto; text-align: center; padding: 6px 8px; }
   h1 { font-size: 2.1rem; }
   main { padding-top: 20px; }
 }

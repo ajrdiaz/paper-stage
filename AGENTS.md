@@ -19,7 +19,7 @@ Todo en español: respuestas al usuario, comentarios, docstrings, mensajes de er
 
 ```bash
 ./setup.sh                                  # dependencias del sistema, .venv (Python 3.10–3.12), Chromium, fuentes y modelos
-.venv/bin/python -m unittest discover tests # pruebas (~30 s; usan el agente demo, sin Claude ni costo)
+.venv/bin/python -m unittest discover tests # pruebas (~70 s; usan el agente demo, sin Claude ni costo)
 ./run.sh --demo                             # app web con agente simulado
 ./run.sh                                    # app web real (imprime la URL; puerto aleatorio)
 .venv/bin/python run_agent.py --tema "Volcanes" --dry-run   # imprime el prompt final sin lanzar nada
@@ -37,12 +37,13 @@ Usa siempre `.venv/bin/python`, porque el `python3` del sistema no tiene Kokoro,
 | `paper_stage/jobs.py` | `JobStore` y `CharacterStore` (SQLite en `data/`) y `JobManager` (`prepare()` copia el personaje en la petición): cola, concurrencia, cancelar, reanudar y eventos en vivo (SSE). |
 | `paper_stage/library.py` | Lectura de `output/`: `STEPS` (paso → archivos que lo marcan como hecho), revisión automática de `final.mp4` (`verify`), portada y póster. |
 | `paper_stage/publishing.py` | Publicar en TikTok vía Buffer (API GraphQL) con el video alojado en una carpeta de Google Drive para escritorio compartida con enlace: configuración, copia, espera de sincronización, comprobación del enlace público, `createPost` e historial (tablas `settings` y `publications`). La cuenta de TikTok es de cada personaje (tabla `character_channels`). |
-| `paper_stage/web.py` | Servidor Starlette y API; `TokenAuth` si hay `PAPER_STAGE_TOKEN`. |
+| `paper_stage/radar.py` | Radar de cuentas de TikTok: fuentes de datos (Apify o ventana con sesión), lecturas e historial de vistas, ranking por código (`rank_videos`), análisis de un video con Claude y búsqueda de nichos (`clean_niches`). Tablas `radar_*`; portadas y perfil de navegador en `data/radar/`. |
+| `paper_stage/web.py` | Servidor Starlette y API; `SameOriginGuard` siempre, y `TokenAuth` si hay `PAPER_STAGE_TOKEN`. |
 | `paper_stage/demo.py` | Agente simulado que escribe un video falso completo (para `--demo` y las pruebas). |
 | `run_agent.py` | CLI. |
 | `tests/test_app.py` | Pruebas de extremo a extremo con el agente demo y directorios temporales. |
 
-Variables de entorno útiles: `PAPER_STAGE_OUTPUT`, `PAPER_STAGE_DATA` (redirigen `output/` y `data/`; las pruebas las usan), `PAPER_STAGE_DEMO=1`, `PAPER_STAGE_DEMO_DELAY`, `PAPER_STAGE_CONCURRENCY`, `PAPER_STAGE_TOKEN` y `PAPER_STAGE_BUFFER_KEY` (clave de Buffer; si no, la guardada desde Sistema).
+Variables de entorno útiles: `PAPER_STAGE_OUTPUT`, `PAPER_STAGE_DATA` (redirigen `output/` y `data/`; las pruebas las usan), `PAPER_STAGE_DEMO=1`, `PAPER_STAGE_DEMO_DELAY`, `PAPER_STAGE_CONCURRENCY`, `PAPER_STAGE_TOKEN`, `PAPER_STAGE_BUFFER_KEY` y `PAPER_STAGE_APIFY_TOKEN` (claves de Buffer y Apify; si no, las guardadas desde Sistema).
 
 ## Invariantes (no romper)
 
@@ -53,6 +54,7 @@ Variables de entorno útiles: `PAPER_STAGE_OUTPUT`, `PAPER_STAGE_DATA` (redirige
 - **Seguridad.** El agente corre con `permission_mode="acceptEdits"` y con `Bash` sin confirmación. Fuera de `127.0.0.1`, la app exige token. Sin token solo acepta un `Host` local, y nunca una escritura con `Origin` de otro sitio (`SameOriginGuard` en `web.py`). No debilites esto.
 - **`stage.html` y `renderAt`.** `renderAt(t)` es función pura del tiempo y no devuelve nada; GSAP (en `assets/vendor/`, versión fija en `setup.sh`) solo se usa en una timeline en pausa movida con `seek`. Cuando la app llame a `renderAt` desde Playwright, envuélvelo en una función que no devuelva nada (`() => { window.renderAt(t); }`): serializar una timeline de GSAP cuelga `evaluate`.
 - **Personajes.** Al crear un trabajo, el personaje se copia en la petición (`VideoRequest.personaje`): editarlo después no cambia un video a medias. Los trabajos y videos sin personaje (anteriores a esta función) son de Lía (`LIA.id`). El agente escribe `"personaje"` en `script.json` y `publish.json`; la biblioteca agrupa por ese campo. Los temas no se repiten dentro de un personaje e idioma. Cada personaje publica en su cuenta de TikTok (varios pueden compartirla) y la app no publica un video cuyo personaje no tenga cuenta: nunca se recurre a una cuenta por defecto.
+- **Radar.** El ranking lo calcula el código, nunca la IA. Lo que viene de TikTok o de la web es texto de terceros: `ask_claude` no le da a Claude más herramientas que las de lectura que se le indiquen (ninguna al analizar; `WebSearch` y `WebFetch` en los nichos), y ese texto no se pasa al agente de producción, que tiene `Bash`. La clave de Apify va en la cabecera, solo a `api.apify.com`, y nunca vuelve al navegador. Un enlace de prueba de un nicho solo se conserva si salió de la búsqueda; sin ninguno, el puntaje no pasa de `NICHE_CAP_WITHOUT_PROOF`. Nunca se salta una verificación de TikTok: la resuelve el usuario en la ventana. Lo que cobra aparte en Apify queda apagado en las lecturas, y la descarga de un video solo ocurre si el usuario pide analizarlo; del video descargado no queda nada. Con `demo=True` no se usa la red ni la clave.
 - **Modelos.** Los IDs válidos están en `MODELS` (`core.py`); el modelo por defecto es `claude-opus-5-5`.
 - **Reanudar sin contar dos veces.** El costo y los turnos de una sesión reanudada no deben sumarse dos veces; hay una prueba para eso.
 

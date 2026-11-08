@@ -1168,7 +1168,9 @@ async function renderSystem() {
   view.innerHTML = `<div class="page-head"><div><h1>Sistema</h1><p>Lo que el agente necesita en este equipo para producir los videos.</p></div></div>
     <div class="grid-studio"><section class="card stack" id="deps"><p class="muted">Revisando…</p></section>
     <section class="card stack" id="about"></section></div>`;
-  view.insertAdjacentHTML("beforeend", `<section class="card stack" id="publishing" style="margin-top:24px"></section>`);
+  view.insertAdjacentHTML("beforeend", `<section class="card stack" id="radar-setup" style="margin-top:24px"></section>
+    <section class="card stack" id="publishing" style="margin-top:24px"></section>`);
+  mountRadarSetup($("#radar-setup"));
   mountPublishingSetup($("#publishing"));
   const health = await api("/api/health");
   const group = (kind, title) => `<h2>${title}</h2><ul class="checklist">${health.items.filter(i => i.kind === kind).map(i => `
@@ -1400,6 +1402,265 @@ async function mountPublish(box, slug) {
   }, box);
 }
 
+/* ------------------------------------------------------------------ vista: radar */
+
+const fmtCount = n => (n == null ? "—" : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}K` : String(n));
+const fmtDay = ts => new Date(ts * 1000).toLocaleDateString("es", { day: "numeric", month: "short" });
+const RADAR_SOURCE = {
+  demo: "Datos de ejemplo (modo demo): no se usa TikTok ni crédito.",
+  apify: "Lee con Apify: cifras exactas, sin abrir nada.",
+  sesion: "Sin clave de Apify: abre una ventana con el perfil propio de la app, y si TikTok lo pide, inicias sesión o verificas ahí, con una cuenta secundaria. Solo trae vistas redondeadas.",
+};
+
+function radarVideoCard(v) {
+  const analyzed = !!v.analysis;
+  return `
+    <article class="vcard radar-card">
+      <a class="thumb" href="${esc(v.url)}" target="_blank" rel="noopener" aria-label="Ver en TikTok">
+        <span class="ph">${esc(v.text.slice(0, 70) || "Sin texto")}</span>
+        ${v.has_cover ? `<img src="/radar/cover/${esc(v.id)}.jpg" alt="" loading="lazy" onerror="this.remove()">` : ""}
+        ${v.duration ? `<span class="dur">${esc(v.duration)} s</span>` : ""}
+      </a>
+      <div class="body">
+        <div class="row radar-numbers">
+          <strong class="radar-views">${fmtCount(v.views)}</strong>
+          ${v.multiple != null ? `<span class="pill plain ${v.viral ? "done" : ""}" title="Veces la mediana de la cuenta">${esc(v.multiple)}×</span>` : ""}
+          ${v.viral ? `<span class="pill running">Viral</span>` : ""}
+          ${v.pinned ? `<span class="pill plain" title="Fijado por la cuenta: no cuenta en su mediana">Fijado</span>` : ""}
+        </div>
+        <span class="small clamp">${esc(v.text)}</span>
+        <span class="small muted">@${esc(v.handle)} · ${fmtDay(v.created_at)} · ${fmtCount(v.views_per_day)}/día${v.velocity != null ? ` · ritmo actual ${fmtCount(Math.max(v.velocity, 0))}/día` : ""}</span>
+        ${v.analysis_error ? `<span class="small" style="color:var(--warn)" role="alert">${esc(v.analysis_error)}</span>` : ""}
+        <div class="row">
+          ${analyzed ? `<button type="button" class="btn small" data-show="${esc(v.id)}">Ver análisis</button>` : ""}
+          <button type="button" class="btn small ${analyzed ? "" : "primary"}" data-analyze="${esc(v.id)}" ${v.analyzing ? "disabled" : ""}>${v.analyzing ? "Analizando…" : analyzed ? "Repetir" : "Analizar"}</button>
+        </div>
+      </div>
+    </article>`;
+}
+
+function radarAnalysisHtml(v) {
+  const a = v.analysis;
+  const row = (label, text) => (text ? `<h3>${label}</h3><p>${esc(text)}</p>` : "");
+  return `
+    <div class="md">
+      <p class="small muted"><a href="${esc(v.url)}" target="_blank" rel="noopener">Ver en TikTok</a> · @${esc(v.handle)} · ${fmtCount(v.views)} vistas${v.multiple != null ? ` · ${esc(v.multiple)}× su mediana` : ""}</p>
+      ${a.parcial ? `<p class="small" style="color:var(--warn)">Análisis parcial: solo con el texto y la portada, sin ver el video ni oír el audio.</p>` : ""}
+      ${row("Gancho", `${a.gancho}${a.tipo_gancho ? ` (${a.tipo_gancho})` : ""}`)}
+      ${(a.estructura || []).length ? `<h3>Estructura</h3><ol>${a.estructura.map(s => `<li>${esc(s)}</li>`).join("")}</ol>` : ""}
+      ${row("Estilo visual", a.estilo_visual)}
+      ${row("Por qué funciona", a.por_que_funciona)}
+      ${row("Qué reutilizar", a.que_reutilizar)}
+      ${row("Qué evitar", a.que_evitar)}
+      ${a.transcripcion ? `<details class="advanced"><summary>Transcripción</summary><p>${esc(a.transcripcion)}</p></details>` : ""}
+    </div>`;
+}
+
+function radarCounts(title, items) {
+  return `<section class="card stack"><h2>${title}</h2>${items.length
+    ? `<ul class="pub-history">${items.map(i => `<li>${esc(i.valor)} <span class="small muted">× ${i.veces}</span></li>`).join("")}</ul>`
+    : `<p class="small muted">Sale de los videos que analices.</p>`}</section>`;
+}
+
+async function renderRadar(params) {
+  let data = await api("/api/radar");
+  let tab = ["videos", "cuentas", "patrones", "nichos"].includes(params.get("tab")) ? params.get("tab") : "videos";
+  const filters = { handle: "", days: "14", viral: false, sort: "multiple" };
+  let adding = "", nicheTema = "", lastDrawn = "";
+
+  const tabsHtml = () => [["videos", "Videos"], ["cuentas", "Cuentas"], ["patrones", "Patrones"], ["nichos", "Nichos"]]
+    .map(([k, label]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${label}</button>`).join("");
+
+  const videosTab = () => {
+    const cut = Date.now() / 1000 - Number(filters.days) * 86400;
+    const sorters = { multiple: v => v.multiple ?? -1, views: v => v.views, per_day: v => v.views_per_day, recent: v => v.created_at };
+    const list = data.videos
+      .filter(v => (!filters.handle || v.handle === filters.handle) && v.created_at >= cut && (!filters.viral || v.viral))
+      .sort((a, b) => sorters[filters.sort](b) - sorters[filters.sort](a));
+    return `
+      <div class="row radar-filters">
+        <select id="f-handle" aria-label="Cuenta"><option value="">Todas las cuentas</option>
+          ${data.accounts.map(a => `<option value="${esc(a.handle)}" ${filters.handle === a.handle ? "selected" : ""}>@${esc(a.handle)}</option>`).join("")}</select>
+        <select id="f-days" aria-label="Periodo">${[["14", "Últimos 14 días"], ["7", "Últimos 7 días"], ["3", "Últimos 3 días"]].map(([d, l]) => `<option value="${d}" ${filters.days === d ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <select id="f-sort" aria-label="Ordenar por">${[["multiple", "Más sobre su mediana"], ["views", "Más vistas"], ["per_day", "Más vistas por día"], ["recent", "Más recientes"]].map(([s, l]) => `<option value="${s}" ${filters.sort === s ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <label class="row small"><input type="checkbox" id="f-viral" ${filters.viral ? "checked" : ""}> Solo virales</label>
+      </div>
+      <p class="small muted">Viral: ${data.config.viral_multiple}× su mediana o más y ${fmtCount(data.config.viral_min_views)} vistas o más. Analizar descarga el video${data.config.source === "apify" ? ", con un cargo aparte en Apify" : ""} y lo revisa con Claude.</p>
+      ${list.length ? `<div class="gallery">${list.map(radarVideoCard).join("")}</div>`
+        : `<div class="card empty"><span class="big">${data.videos.length ? "Sin resultados" : "Aún no hay videos"}</span>${data.videos.length ? "Prueba con otros filtros." : "Pulsa «Actualizar» para leer las cuentas."}</div>`}`;
+  };
+
+  const accountsTab = () => {
+    const cost = data.accounts.length * data.config.results_per_account * data.config.cost_per_1000 / 1000;
+    return `
+      <form id="add-account" class="row">
+        <input type="text" id="new-handle" class="radar-input" value="${esc(adding)}" autocomplete="off" aria-label="Cuenta de TikTok" placeholder="Pega el enlace del perfil o escribe @usuario">
+        <button class="btn primary">Añadir</button>
+      </form>
+      <p class="small muted">${data.config.source === "apify" ? `Cada actualización lee hasta ${data.config.results_per_account} videos por cuenta: unos $${cost.toFixed(2)} con estas cuentas. El plan gratis trae $5 al mes.` : esc(RADAR_SOURCE[data.config.source])}</p>
+      ${data.accounts.length ? `<div class="radar-table-wrap"><table class="files radar-table"><thead><tr><th>Cuenta</th><th>Seguidores</th><th>Videos en ${data.config.window_days} días</th><th>Al día</th><th>Mediana</th><th>Mejor</th><th>Virales</th><th></th></tr></thead><tbody>
+        ${data.accounts.map(a => `<tr>
+          <td><a href="${esc(a.url)}" target="_blank" rel="noopener">@${esc(a.handle)}</a>
+            ${a.last_error ? `<br><span class="small" style="color:var(--warn)">${esc(a.last_error)}</span>` : a.last_scan_at ? `<br><span class="small muted">Leída ${fmtDate(a.last_scan_at)}</span>` : `<br><span class="small muted">Sin leer</span>`}</td>
+          <td>${fmtCount(a.followers)}</td><td>${a.window_videos}</td><td>${a.per_day}</td><td>${fmtCount(a.median_views)}</td>
+          <td>${fmtCount(a.best_views)}${a.best_multiple != null ? ` <span class="small muted">(${esc(a.best_multiple)}×)</span>` : ""}</td><td>${a.viral_videos}</td>
+          <td><button type="button" class="btn small danger" data-remove="${esc(a.handle)}" aria-label="Quitar @${esc(a.handle)}">Quitar</button></td></tr>`).join("")}
+      </tbody></table></div>` : `<div class="card empty"><span class="big">Sin cuentas</span>Añade la primera.</div>`}`;
+  };
+
+  const patternsTab = () => {
+    const p = data.patterns, active = data.accounts.filter(a => a.window_videos);
+    const perDay = active.length ? (active.reduce((s, a) => s + a.per_day, 0) / active.length).toFixed(1) : "—";
+    return `
+      <div class="radar-stats">
+        <div class="card"><strong>${p.videos}</strong><span class="small muted">videos en ${data.config.window_days} días</span></div>
+        <div class="card"><strong>${p.virales}</strong><span class="small muted">virales</span></div>
+        <div class="card"><strong>${perDay}</strong><span class="small muted">publicaciones al día por cuenta</span></div>
+        <div class="card"><strong>${p.duracion_viral ? `${p.duracion_viral} s` : "—"}</strong><span class="small muted">duración típica de los virales</span></div>
+      </div>
+      <p class="small muted">${p.analizados} video(s) analizado(s). Los temas, ganchos y estilos salen de esos análisis: cuantos más analices, más fiable es el patrón.</p>
+      <div class="radar-patterns">${radarCounts("Temas", p.temas)}${radarCounts("Tipos de gancho", p.ganchos)}${radarCounts("Estilos", p.estilos)}</div>`;
+  };
+
+  const nicheCard = (n, known) => `
+    <article class="card stack radar-niche">
+      <div class="row"><h3>${esc(n.nicho)}</h3><span class="spacer"></span><span class="pill plain ${n.puntaje >= 7 ? "done" : ""}">${esc(n.puntaje)}/10</span></div>
+      ${n.por_que ? `<p>${esc(n.por_que)}</p>` : ""}
+      ${n.angulo_propio ? `<p class="small"><strong>Ángulo propio:</strong> ${esc(n.angulo_propio)}</p>` : ""}
+      ${n.temas_ejemplo.length ? `<p class="small"><strong>Temas:</strong> ${n.temas_ejemplo.map(esc).join(" · ")}</p>` : ""}
+      ${n.riesgos ? `<p class="small muted"><strong>Riesgos:</strong> ${esc(n.riesgos)}</p>` : ""}
+      ${n.senales.length ? `<ul class="small radar-signals">${n.senales.map(s => `<li>${esc(s.detalle)}${s.url ? ` <a href="${esc(s.url)}" target="_blank" rel="noopener">Fuente</a>` : ` <span class="muted">(sin enlace)</span>`}</li>`).join("")}</ul>` : ""}
+      ${n.cuentas.length ? `<div class="row small">${n.cuentas.map(h => {
+        const account = known.get(h);
+        return `<a href="https://www.tiktok.com/@${esc(h)}" target="_blank" rel="noopener">@${esc(h)}</a>${account?.last_scan_at && !account.last_error ? ` <span class="muted">(mediana ${fmtCount(account.median_views)})</span>` : ""}`;
+      }).join(" · ")}
+        ${n.cuentas.some(h => !known.has(h)) ? `<button type="button" class="btn small" data-watch="${esc(n.cuentas.join(","))}">Añadir al Radar y leerlas</button>` : ""}</div>` : ""}
+    </article>`;
+
+  const nichesTab = () => {
+    const known = new Map(data.accounts.map(a => [a.handle, a]));
+    const running = data.niche_runs.some(r => r.status === "running");
+    return `
+      <form id="find-niches" class="row">
+        <input type="text" id="niche-tema" class="radar-input" maxlength="120" value="${esc(nicheTema)}" autocomplete="off" aria-label="Tema (opcional)" placeholder="Tema opcional: coches, cocina, dinero…">
+        <button class="btn primary" ${running ? "disabled" : ""}>${running ? "Buscando…" : "Buscar nichos"}</button>
+      </form>
+      <p class="small muted">Claude busca en la web y usa los virales del Radar como pista. Cada prueba lleva su enlace; sin ninguno, el puntaje no pasa de 6. Las cuentas que propone aún no están comprobadas: al añadirlas se leen y ves sus cifras reales.</p>
+      ${data.niche_runs.length ? data.niche_runs.map((r, i) => {
+        const title = `${r.tema ? esc(r.tema) : "Todos los temas"} · ${fmtDate(r.created_at)}`;
+        const body = r.status === "running" ? `<p class="small muted loading"><span class="spinner" aria-hidden="true"></span>Investigando; puede tardar unos minutos…</p>`
+          : r.status === "failed" ? `<p class="small" style="color:var(--warn)" role="alert">${esc(r.error)}</p>`
+          : `<div class="stack">${r.nichos.map(n => nicheCard(n, known)).join("")}</div>`;
+        return `<details class="radar-run" ${i === 0 ? "open" : ""}><summary><strong>${title}</strong></summary>${body}</details>`;
+      }).join("") : `<div class="card empty"><span class="big">Aún no hay búsquedas</span>Déjalo vacío para ver todo, o escribe un tema.</div>`}`;
+  };
+
+  const bodies = { videos: videosTab, cuentas: accountsTab, patrones: patternsTab, nichos: nichesTab };
+  const stateKey = () => JSON.stringify([data, tab]);
+
+  function draw(force = true) {
+    if (!force && stateKey() === lastDrawn) return;
+    lastDrawn = stateKey();
+    const scan = data.scan, lastRead = Math.max(0, ...data.accounts.map(a => a.last_scan_at || 0));
+    view.innerHTML = `
+      <div class="page-head">
+        <div><h1>Radar</h1><p>Lo que funciona ahora en las cuentas que vigilas, con sus cifras de los últimos ${data.config.window_days} días.</p></div>
+        <div class="row">
+          <span class="small muted">${lastRead ? `Última lectura: ${fmtDate(lastRead)}` : "Sin leer todavía"}</span>
+          <button type="button" class="btn primary" id="radar-scan" ${data.scanning ? "disabled" : ""}>${data.scanning ? "Leyendo…" : "Actualizar"}</button>
+        </div>
+      </div>
+      ${scan ? `<p class="small radar-status" role="status" ${scan.state === "failed" ? `style="color:var(--warn)"` : ""}>${data.scanning ? `<span class="spinner" aria-hidden="true"></span>` : ""}${esc(scan.step)}</p>` : ""}
+      <section class="card">
+        <div class="tabbar" role="tablist">${tabsHtml()}</div>
+        <div id="radar-body" class="stack">${bodies[tab]()}</div>
+      </section>`;
+  }
+
+  // Las acciones responden con el estado completo; un error se muestra sin perder lo escrito.
+  async function act(path, options) {
+    try { data = await api(path, options); draw(); }
+    catch (err) { toast(esc(err.message), "err"); }
+  }
+
+  view.onclick = async ev => {
+    const t = ev.target.closest("[data-tab]");
+    if (t) { tab = t.dataset.tab; draw(); return; }
+    if (ev.target.closest("#radar-scan")) { await act("/api/radar/scan", { method: "POST", body: {} }); return; }
+    const analyze = ev.target.closest("[data-analyze]");
+    if (analyze) { await act(`/api/radar/videos/${analyze.dataset.analyze}/analyze`, { method: "POST" }); return; }
+    const show = ev.target.closest("[data-show]");
+    if (show) { const v = data.videos.find(x => x.id === show.dataset.show); if (v) modal(v.analysis.gancho || "Análisis", radarAnalysisHtml(v)); return; }
+    const remove = ev.target.closest("[data-remove]");
+    if (remove && confirmAction(`¿Quitar a @${remove.dataset.remove} del Radar? Se borran sus videos y análisis guardados.`)) {
+      await act(`/api/radar/accounts/${encodeURIComponent(remove.dataset.remove)}`, { method: "DELETE" });
+      return;
+    }
+    const watch = ev.target.closest("[data-watch]");
+    if (watch) {
+      const handles = watch.dataset.watch.split(",");
+      try {
+        for (const handle of handles) await api("/api/radar/accounts", { method: "POST", body: { handle } });
+        await act("/api/radar/scan", { method: "POST", body: { handles } });
+      } catch (err) { toast(esc(err.message), "err"); }
+    }
+  };
+  view.onchange = ev => {
+    const id = ev.target.id;
+    if (id === "f-handle") filters.handle = ev.target.value;
+    else if (id === "f-days") filters.days = ev.target.value;
+    else if (id === "f-sort") filters.sort = ev.target.value;
+    else if (id === "f-viral") filters.viral = ev.target.checked;
+    else return;
+    draw();
+  };
+  view.oninput = ev => {
+    if (ev.target.id === "new-handle") adding = ev.target.value;
+    if (ev.target.id === "niche-tema") nicheTema = ev.target.value;
+  };
+  view.onsubmit = async ev => {
+    ev.preventDefault();
+    if (ev.target.id === "add-account") {
+      try { data = await api("/api/radar/accounts", { method: "POST", body: { handle: adding } }); adding = ""; draw(); }
+      catch (err) { toast(esc(err.message), "err"); }
+    }
+    if (ev.target.id === "find-niches") await act("/api/radar/niches", { method: "POST", body: { tema: nicheTema } });
+  };
+  // Estos manejadores viven en #view, que es de todas las vistas: se quitan al salir.
+  onCleanup(() => { view.onclick = view.onchange = view.oninput = view.onsubmit = null; });
+
+  draw();
+  poll(async () => {
+    const busy = data.scanning || data.videos.some(v => v.analyzing) || data.niche_runs.some(r => r.status === "running");
+    if (!busy) return;
+    data = await api("/api/radar");
+    // No repintar mientras se escribe en un campo del Radar.
+    if (!["new-handle", "niche-tema"].includes(document.activeElement?.id)) draw(false);
+  }, 3000);
+}
+
+async function mountRadarSetup(box) {
+  let data = await api("/api/radar");
+  const draw = () => {
+    const c = data.config;
+    box.innerHTML = `
+      <div class="row"><h2>Fuente de datos del Radar</h2><span class="spacer"></span>
+        <span class="pill ${c.source === "sesion" ? "" : "done"}">${c.source === "apify" ? "Apify" : c.source === "demo" ? "Demo" : "Ventana con sesión"}</span></div>
+      <p class="small muted">${esc(RADAR_SOURCE[c.source])}</p>
+      ${c.demo ? "" : `<div class="field"><label for="apify-key">Clave de API de Apify</label>
+        <div class="row"><input type="password" id="apify-key" class="radar-input" autocomplete="off" placeholder="${c.apify_token ? `Guardada (${esc(c.apify_hint)})` : "Pega aquí tu clave"}" ${c.apify_env ? "disabled" : ""}>
+          <button type="button" class="btn small" id="apify-save" ${c.apify_env ? "disabled" : ""}>Guardar</button></div>
+        <span class="hint">${c.apify_env ? "Viene de la variable PAPER_STAGE_APIFY_TOKEN." : `Plan gratis sin tarjeta: <a href="https://console.apify.com/settings/integrations" target="_blank" rel="noopener">copia tu clave de Apify aquí</a>. Se guarda solo en este equipo, en data/. Vacía, vuelve a la ventana con sesión.`}</span></div>
+        <p id="apify-error" class="small" style="color:var(--warn)" role="alert"></p>`}`;
+  };
+  draw();
+  box.addEventListener("click", async ev => {
+    if (ev.target.id !== "apify-save") return;
+    try { data = await api("/api/radar/config", { method: "PUT", body: { apify_token: $("#apify-key", box).value } }); draw(); toast("Guardado.", "ok"); }
+    catch (err) { $("#apify-error", box).textContent = err.message; }
+  });
+}
+
 /* ------------------------------------------------------------------ enrutador */
 
 async function route() {
@@ -1409,7 +1670,7 @@ async function route() {
   const parts = path.split("/").filter(Boolean);
   const params = new URLSearchParams(query);
   const section = parts[0] === "biblioteca" || parts[0] === "video" ? "library" : parts[0] === "sistema" ? "system"
-    : parts[0] === "personajes" ? "characters" : "studio";
+    : parts[0] === "personajes" ? "characters" : parts[0] === "radar" ? "radar" : "studio";
   $$("[data-nav]").forEach(a => (a.dataset.nav === section ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
   try {
     if (parts[0] === "trabajo" && parts[1]) await renderJob(decodeURIComponent(parts[1]));
@@ -1419,6 +1680,7 @@ async function route() {
     else if (parts[0] === "personajes") await renderCharacters();
     else if (parts[0] === "biblioteca") await renderLibrary(params);
     else if (parts[0] === "sistema") await renderSystem();
+    else if (parts[0] === "radar") await renderRadar(params);
     else await renderStudio(params);
   } catch (err) {
     view.innerHTML = `<div class="card empty"><span class="big">Algo salió mal</span>${esc(err.message)}</div>`;

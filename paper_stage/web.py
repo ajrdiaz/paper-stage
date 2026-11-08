@@ -23,6 +23,7 @@ from starlette.staticfiles import StaticFiles
 from . import core, library
 from .jobs import TERMINAL, JobManager
 from .publishing import TEST_SLUG, PublishError, PublishRequest, Publisher, default_text, text_units
+from .radar import Radar, RadarError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -107,7 +108,7 @@ class TokenAuth(BaseHTTPMiddleware):
 
 def create_app(manager: JobManager | None = None, token: str | None = None,
                suggester: Callable | None = None, character_suggester: Callable | None = None,
-               publisher: Publisher | None = None) -> Starlette:
+               publisher: Publisher | None = None, radar: Radar | None = None) -> Starlette:
     if manager is None:
         runner = None
         if os.environ.get("PAPER_STAGE_DEMO") == "1":
@@ -131,6 +132,12 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             parts = demo_publisher_parts(manager.data_dir)
         publisher = Publisher(manager.store.db, **parts)
     publisher.migrate_channels([c.id for c in manager.characters.list()])
+    if radar is None:
+        parts = {}
+        if demo:
+            from .demo import demo_radar_parts
+            parts = demo_radar_parts()
+        radar = Radar(manager.store.db, manager.data_dir, **parts)
     if character_suggester is None:
         if demo:
             from .demo import suggest_characters_demo as character_suggester
@@ -141,6 +148,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
     async def lifespan(app):
         await manager.start()
         yield
+        await radar.stop()
         await publisher.stop()
         await manager.stop()
 
@@ -418,6 +426,48 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         except PublishError as exc:
             return _error(str(exc), 409)
 
+    # ------------------------------------------------------------------ radar
+
+    async def radar_overview(request: Request):
+        return JSONResponse(radar.overview())
+
+    def _radar_action(action):
+        """Las acciones del radar responden con el estado completo, para repintar la vista."""
+        async def endpoint(request: Request):
+            try:
+                await action(request)
+            except KeyError:
+                return _error("No encontrado.", 404)
+            except RadarError as exc:
+                return _error(str(exc), 409)
+            except ValueError as exc:
+                return _error(str(exc))
+            return JSONResponse(radar.overview())
+        return endpoint
+
+    async def _radar_config(request: Request):
+        radar.save_config(await _json(request))
+
+    async def _radar_add(request: Request):
+        radar.add_account((await _json(request)).get("handle"))
+
+    async def _radar_remove(request: Request):
+        radar.remove_account(request.path_params["handle"])
+
+    async def _radar_scan(request: Request):
+        handles = (await _json(request)).get("handles")
+        radar.start_scan([str(h) for h in handles] if isinstance(handles, list) else None)
+
+    async def _radar_analyze(request: Request):
+        radar.start_analysis(request.path_params["video_id"])
+
+    async def _radar_niches(request: Request):
+        radar.start_niches((await _json(request)).get("tema"))
+
+    async def radar_cover(request: Request):
+        path = radar.cover_path(request.path_params["video_id"])
+        return FileResponse(path) if path else _error("Sin portada.", 404)
+
     # ------------------------------------------------------------------ biblioteca
 
     async def list_videos(request: Request):
@@ -503,6 +553,14 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Route("/api/publishing/channels", publishing_channels),
         Route("/api/publishing/channels/{character_id}", character_channel, methods=["PUT"]),
         Route("/api/publishing/test", publishing_test, methods=["GET", "POST"]),
+        Route("/api/radar", radar_overview),
+        Route("/api/radar/config", _radar_action(_radar_config), methods=["PUT"]),
+        Route("/api/radar/accounts", _radar_action(_radar_add), methods=["POST"]),
+        Route("/api/radar/accounts/{handle}", _radar_action(_radar_remove), methods=["DELETE"]),
+        Route("/api/radar/scan", _radar_action(_radar_scan), methods=["POST"]),
+        Route("/api/radar/videos/{video_id}/analyze", _radar_action(_radar_analyze), methods=["POST"]),
+        Route("/api/radar/niches", _radar_action(_radar_niches), methods=["POST"]),
+        Route("/radar/cover/{video_id}.jpg", radar_cover),
         Route("/poster/{slug}.jpg", poster),
         Route("/cover/{slug}.jpg", cover),
         Route("/files/{slug}/{path:path}", output_file),
@@ -516,4 +574,5 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
     app = Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
     app.state.manager = manager
     app.state.publisher = publisher
+    app.state.radar = radar
     return app

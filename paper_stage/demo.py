@@ -380,6 +380,81 @@ async def suggest_characters_demo(idioma: str, edad: str, pista: str, avoid: lis
     return ideas[:n]
 
 
+RADAR_TEXTS = [
+    "¿Por qué siempre te pican a ti los mosquitos?", "Ese último chorrito de gasolina es el más caro.",
+    "Por esto siempre tienes los pies fríos en la cama.", "Bajar en punto muerto no ahorra gasolina.",
+    "El refresco de vidrio sí sabe más rico.", "Lo que hace tu cuerpo si andas 10 minutos al comer.",
+    "Tu sartén no se pega por lo que crees.", "Por qué el pan de ayer está más duro.",
+    "El truco del aire acondicionado que nadie usa.", "Qué pasa si no apagas el router nunca.",
+]
+_radar_reads = {"n": 0}
+
+
+def demo_radar_source(handles: list[str], progress: Callable[[str], None]) -> dict[str, dict]:
+    """Datos de ejemplo, sin red ni crédito: en cada cuenta, un video se dispara sobre los demás
+    y cada lectura suma vistas, para ver las veces sobre la mediana y la velocidad."""
+    import time
+    import zlib
+
+    _radar_reads["n"] += 1
+    now, out = time.time(), {}
+    for handle in handles:
+        progress(f"Leyendo @{handle} (modo demo)…")
+        seed = zlib.crc32(handle.encode())
+        videos = []
+        for i in range(12):
+            created = int(now - (i * 1.1 + .3) * 86400)
+            base = 8000 + (seed + i * 7919) % 90000
+            views = base * (60 if i == 2 else 1) * (1 + _radar_reads["n"] * .05)
+            videos.append({
+                "id": str((created << 32) + (seed + i) % 2**31), "created_at": created,
+                "text": f"{RADAR_TEXTS[(seed + i) % len(RADAR_TEXTS)]} #curiosidades #sabiasque", "cover": "",
+                "duration": 61 + (seed + i) % 9, "views": int(views), "likes": int(views * .08),
+                "comments": int(views * .002), "shares": int(views * .01), "saves": int(views * .02), "pinned": i == 2,
+            })
+        out[handle] = {"followers": 20000 + seed % 100000, "total_videos": 60, "videos": videos}
+    return out
+
+
+async def analyze_demo(video: dict, transcript: str, images: list[bytes]) -> dict:
+    await asyncio.sleep(min(SPEED, 0.6))
+    return {"tema": "cosas cotidianas", "gancho": video["text"].split("#")[0].strip(),
+            "tipo_gancho": "afirmación que parece falsa",
+            "estructura": ["0 s: gancho escrito y hablado", "5 s: la creencia común", "25 s: la explicación con animación",
+                           "50 s: el dato que sorprende", "60 s: cierre que invita a comentar"],
+            "estilo_visual": "objetos animados sobre fondo oscuro, con texto arriba",
+            "por_que_funciona": "Modo demostración: aquí va la explicación de Claude basada en las cifras y en lo que se ve.",
+            "que_reutilizar": "Empezar por algo que el público cree saber y desmentirlo en la primera frase.",
+            "que_evitar": "Copiar el mismo ejemplo o sus frases."}
+
+
+async def find_niches_demo(tema: str, context: list[dict]) -> tuple[list[dict], set[str]]:
+    await asyncio.sleep(min(SPEED, 0.6))
+    proof = "https://example.com/tendencia"
+    items = [
+        {"nicho": "Lo que nadie te explicó de tu coche", "puntaje": 9, "cuentas": ["importacrew", "motor.curioso"],
+         "por_que": "Modo demostración: todo el mundo conduce y los mitos se comparten mucho.",
+         "angulo_propio": "Contar el costo en dinero de cada mito.", "riesgos": "Competencia creciente.",
+         "temas_ejemplo": ["Por qué el motor frío gasta más", "El mito del punto muerto", "Qué mide de verdad el cuentakilómetros"],
+         "senales": [{"tipo": "tendencia", "detalle": "Ejemplo de prueba con enlace.", "url": proof}]},
+        {"nicho": "La ciencia de lo que comes cada día", "puntaje": 9, "cuentas": [],
+         "por_que": "Modo demostración: sin ninguna prueba con enlace, su puntaje baja a 6.",
+         "angulo_propio": "Experimentos de cocina que se pueden repetir.", "riesgos": "Evitar consejos de salud.",
+         "temas_ejemplo": ["Por qué el pan se pone duro", "Qué hace la sal al hervir", "El secreto de la fritura"],
+         "senales": [{"tipo": "demanda", "detalle": "Ejemplo de prueba sin enlace.", "url": ""}]},
+        {"nicho": "Por qué tu casa funciona así", "puntaje": 7, "cuentas": ["ingenioculto"],
+         "por_que": "Modo demostración: objetos que todos usan y nadie entiende.",
+         "angulo_propio": "Abrir por dentro un objeto en cada video.", "riesgos": "Temas repetidos a la larga.",
+         "temas_ejemplo": ["Dentro de una llave de agua", "Por qué el enchufe tiene tres patas", "Cómo sabe el router"],
+         "senales": [{"tipo": "cuenta", "detalle": "Ejemplo de prueba con enlace.", "url": proof}]},
+    ]
+    return items, {proof}
+
+
+def demo_radar_parts() -> dict:
+    return {"source": demo_radar_source, "analyzer": analyze_demo, "niche_finder": find_niches_demo, "demo": True}
+
+
 def demo_publisher_parts(data_dir: Path) -> dict:
     """Drive y Buffer simulados para el modo demo: sin red, sin cuentas y sin publicar nada."""
     from .publishing import BUFFER_API
