@@ -14,8 +14,8 @@ Trabajas en `output/{{SLUG}}/`. **No uses ninguna API de pago.** Voz, música, e
 |---|---|---|
 | Variante | Español latinoamericano neutro (tú; sin modismos de un solo país) | Inglés americano |
 | Voz Piper (fallback) | `es_MX-claude-high` | `en_US-amy-medium` |
-| Velocidad TTS | 1.02–1.08 (ágil, con pausas donde sorprende) | 1.04–1.10 |
-| Palabras de narración | 150–175 | 160–185 |
+| Velocidad TTS | 0.98–1.06 (ágil y sin pausas añadidas) | 1.00–1.08 |
+| Palabras de narración | 170–195 | 180–205 |
 | Títulos, subtítulos, metadatos | Español | Inglés |
 
 **Voz de la serie:** Kokoro `{{VOZ}}` (lang_code `{{LANG_CODE}}`). Si tienes que usar Piper y su voz no coincide (femenina o masculina), elige otra voz de Piper del mismo idioma que sí coincida.
@@ -133,7 +133,7 @@ Siete escenas con título, rango de tiempo, descripción visual, `VO:` (la líne
 ## 6. Voz (TTS local, costo cero)
 
 - **Principal: Kokoro-82M** (`pip install kokoro soundfile`; requiere `espeak-ng`). **Fallback: Piper** (`pip install piper-tts`).
-- Genera una WAV por escena, con 30–60 ms de silencio al inicio de cada frase: Kokoro y `silenceremove` pueden comerse una vocal inicial ("Etiqueta" sonó "Tiqueta"). Recorta los extremos con un umbral bajo y sin tocar la voz, y añade 120–250 ms de silencio al final de cada escena.
+- **La voz debe sonar fluida: genera cada escena de una sola vez**, con todo su texto, para que el TTS enlace las frases con su entonación natural. Nunca sintetices frase por frase ni pegues frases con pausas añadidas: suena entrecortado. Las pausas salen de la puntuación. No recortes dentro de la escena: en sus extremos, solo el silencio real con un umbral muy bajo, porque recortar se come vocales iniciales ("Etiqueta" sonó "Tiqueta"). Añade 80–150 ms al final de cada escena.
 - **No puedes oír el audio: compruébalo transcribiendo.** Pasa cada WAV por `faster-whisper` sin prompt y compara palabra por palabra con la línea del guion. Si una palabra sale distinta, se pronuncia mal o se corta: cambia su grafía solo en el texto que va al TTS o reordena la frase, y repite hasta que coincidan.
 - Si hace falta ajustar el tono: `rubberband=pitch=…` (fallback: `asetrate` + `atempo`). No pases de 1.05 ni bajes de 0.95.
 - Escribe cifras y siglas como se dicen ("mil novecientos setenta y cuatro"), y los nombres propios extranjeros con la ortografía que el TTS pronuncia bien (solo en el texto que va al TTS; en los subtítulos, la ortografía correcta).
