@@ -137,7 +137,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         if demo:
             from .demo import demo_radar_parts
             parts = demo_radar_parts()
-        radar = Radar(manager.store.db, manager.data_dir, **parts)
+        radar = Radar(manager.store.db, manager.data_dir, used_topics=manager.used_topics, **parts)
     if character_suggester is None:
         if demo:
             from .demo import suggest_characters_demo as character_suggester
@@ -467,6 +467,15 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
     async def _radar_search(request: Request):
         radar.start_account_search(request.path_params["run_id"], request.path_params["index"])
 
+    async def _radar_choose(request: Request):
+        radar.choose_niche(request.path_params["run_id"], request.path_params["index"])
+
+    async def _radar_ideas(request: Request):
+        radar.start_ideas()
+
+    async def _radar_discard(request: Request):
+        radar.discard_idea(request.path_params["idea_id"])
+
     async def radar_cover(request: Request):
         path = radar.cover_path(request.path_params["video_id"])
         return FileResponse(path) if path else _error("Sin portada.", 404)
@@ -564,6 +573,9 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Route("/api/radar/videos/{video_id}/analyze", _radar_action(_radar_analyze), methods=["POST"]),
         Route("/api/radar/niches", _radar_action(_radar_niches), methods=["POST"]),
         Route("/api/radar/niches/{run_id}/{index:int}/accounts", _radar_action(_radar_search), methods=["POST"]),
+        Route("/api/radar/niches/{run_id}/{index:int}/choose", _radar_action(_radar_choose), methods=["POST"]),
+        Route("/api/radar/ideas", _radar_action(_radar_ideas), methods=["POST"]),
+        Route("/api/radar/ideas/{idea_id}", _radar_action(_radar_discard), methods=["DELETE"]),
         Route("/radar/cover/{video_id}.jpg", radar_cover),
         Route("/poster/{slug}.jpg", poster),
         Route("/cover/{slug}.jpg", cover),

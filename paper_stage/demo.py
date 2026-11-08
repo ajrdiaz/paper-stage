@@ -460,9 +460,21 @@ def demo_account_search(queries: list[str]) -> list[dict]:
              "best_text": "Modo demostración: otra cuenta de ejemplo.", "latest": time.time() - 86400 * 20}]
 
 
+async def make_ideas_demo(niche: dict, context: list[dict], used: list[str], n: int) -> list[dict]:
+    await asyncio.sleep(min(SPEED, 0.6))
+    temas = ["¿Por qué bostezas cuando otro bosteza?", "¿Por qué te da hipo sin motivo?", "¿Por qué se te duerme una pierna?",
+             "¿Por qué te ruge el estómago?", "¿Por qué lloras al cortar cebolla?", "¿Por qué te da escalofrío al orinar?",
+             "¿Por qué se te pone la piel de gallina?", "¿Por qué ves puntitos al levantarte?"]
+    source = [context[0]["id"]] if context else []
+    fresh = [t for t in temas if t not in used]
+    return [{"tema": t, "gancho": t, "patron": "Modo demostración: el patrón que reutiliza.", "por_que": "Modo demostración: algo que todos han vivido.",
+             "cierre": "Envíaselo a quien siempre le pasa.", "verificar": "Modo demostración: el dato que hay que comprobar.",
+             "fuentes": source} for t in fresh[:n]]
+
+
 def demo_radar_parts() -> dict:
     return {"source": demo_radar_source, "analyzer": analyze_demo, "niche_finder": find_niches_demo,
-            "account_searcher": demo_account_search, "demo": True}
+            "account_searcher": demo_account_search, "idea_maker": make_ideas_demo, "demo": True}
 
 
 def demo_publisher_parts(data_dir: Path) -> dict:

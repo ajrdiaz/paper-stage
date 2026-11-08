@@ -37,7 +37,7 @@ Usa siempre `.venv/bin/python`, porque el `python3` del sistema no tiene Kokoro,
 | `paper_stage/jobs.py` | `JobStore` y `CharacterStore` (SQLite en `data/`) y `JobManager` (`prepare()` copia el personaje en la petición): cola, concurrencia, cancelar, reanudar y eventos en vivo (SSE). |
 | `paper_stage/library.py` | Lectura de `output/`: `STEPS` (paso → archivos que lo marcan como hecho), revisión automática de `final.mp4` (`verify`), portada y póster. |
 | `paper_stage/publishing.py` | Publicar en TikTok vía Buffer (API GraphQL) con el video alojado en una carpeta de Google Drive para escritorio compartida con enlace: configuración, copia, espera de sincronización, comprobación del enlace público, `createPost` e historial (tablas `settings` y `publications`). La cuenta de TikTok es de cada personaje (tabla `character_channels`). |
-| `paper_stage/radar.py` | Radar de cuentas de TikTok: fuentes de datos (Apify o ventana con sesión), lecturas e historial de vistas, ranking por código (`rank_videos`), análisis de un video con Claude y búsqueda de nichos (`clean_niches`). Tablas `radar_*`; portadas y perfil de navegador en `data/radar/`. |
+| `paper_stage/radar.py` | Radar de cuentas de TikTok: fuentes de datos (Apify o ventana con sesión), lecturas e historial de vistas, ranking por código (`rank_videos`), análisis de un video con Claude, búsqueda de nichos (`clean_niches`) e ideas (`clean_ideas`). Tablas `radar_*`; portadas y perfil de navegador en `data/radar/`. |
 | `paper_stage/web.py` | Servidor Starlette y API; `SameOriginGuard` siempre, y `TokenAuth` si hay `PAPER_STAGE_TOKEN`. |
 | `paper_stage/demo.py` | Agente simulado que escribe un video falso completo (para `--demo` y las pruebas). |
 | `run_agent.py` | CLI. |

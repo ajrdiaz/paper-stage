@@ -22,7 +22,8 @@ os.environ["PAPER_STAGE_DEMO_DELAY"] = "0.01"
 from starlette.testclient import TestClient  # noqa: E402
 
 from paper_stage import core, library  # noqa: E402
-from paper_stage.demo import analyze_demo, demo_account_search, demo_radar_source, find_niches_demo, run_demo  # noqa: E402
+from paper_stage.demo import (analyze_demo, demo_account_search, demo_radar_source, find_niches_demo,  # noqa: E402
+                              make_ideas_demo, run_demo)
 from paper_stage.jobs import JobManager  # noqa: E402
 from paper_stage import publishing, radar  # noqa: E402
 
@@ -676,6 +677,18 @@ class RadarUnitTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(radar.RadarError):
                 radar._extract_json(bad, "[")
 
+    def test_clean_ideas(self):
+        items = [
+            {"tema": "  ¿Por qué  bostezas? ", "fuentes": ["111111", "inventado", "111111"], "gancho": "Hola"},
+            {"tema": "¡POR QUÉ BOSTEZAS!"}, {"tema": "Ya hecho"}, {"tema": "x" * 71}, {"tema": ""}, "no es un objeto",
+            {"tema": "Sin fuentes", "fuentes": "111111"},
+        ]
+        ideas = radar.clean_ideas(items, {"111111"}, ["ya hecho"])
+        self.assertEqual([i["tema"] for i in ideas], ["¿Por qué bostezas?", "Sin fuentes"])
+        self.assertEqual((ideas[0]["fuentes"], ideas[0]["gancho"]), (["111111"], "Hola"))
+        self.assertEqual(ideas[1]["fuentes"], [])
+        self.assertEqual(len(radar.clean_ideas([{"tema": f"Tema {i}"} for i in range(9)], set(), [], 5)), 5)
+
     def test_radar_videos_count_as_proof(self):
         url = radar.video_url("importacrew", "7700576236283759894")
         answer = [{"nicho": "Coches", "puntaje": 9, "senales": [{"detalle": "5M de vistas", "url": url}]}]
@@ -777,7 +790,7 @@ class RadarApiTests(unittest.TestCase):
     def client(self, data, **parts):
         manager = JobManager(TMP / data, runner=run_demo)
         parts = {"source": demo_radar_source, "analyzer": analyze_demo, "niche_finder": find_niches_demo,
-                 "account_searcher": demo_account_search, **parts}
+                 "account_searcher": demo_account_search, "idea_maker": make_ideas_demo, **parts}
         box = radar.Radar(manager.store.db, manager.data_dir, **parts)
         return TestClient(create_app(manager, token="", radar=box), base_url="http://127.0.0.1")
 
@@ -866,6 +879,37 @@ class RadarApiTests(unittest.TestCase):
             found = state["niche_runs"][0]["nichos"][0]
             self.assertEqual(found["encontradas"][0]["handle"], "motor.curioso")
             self.assertIsNone(found["busqueda_error"])
+
+    def test_ideas_come_from_the_chosen_niche(self):
+        with self.client("data-radar-ideas", used_topics=lambda idioma: ["¿Por qué bostezas cuando otro bosteza?"]) as client:
+            self.assertEqual(client.post("/api/radar/ideas").status_code, 409)  # sin nicho elegido
+            client.post("/api/radar/scan", json={})
+            self.wait(client, lambda s: not s["scanning"])
+            client.post("/api/radar/niches", json={})
+            run = self.wait(client, lambda s: s["niche_runs"][0]["status"] != "running")["niche_runs"][0]
+            self.assertEqual(client.post(f"/api/radar/niches/{run['id']}/99/choose").status_code, 404)
+            state = client.post(f"/api/radar/niches/{run['id']}/1/choose").json()
+            self.assertEqual(state["active_niche"]["nicho"], run["nichos"][1]["nicho"])
+
+            client.post("/api/radar/ideas")
+            state = self.wait(client, lambda s: not s["making_ideas"])
+            self.assertIsNone(state["ideas_error"])
+            temas = [i["tema"] for i in state["ideas"]]
+            self.assertEqual(len(temas), 5)
+            self.assertNotIn("¿Por qué bostezas cuando otro bosteza?", temas)  # ya hecho
+            self.assertTrue(state["ideas"][0]["fuentes"][0]["url"].startswith("https://www.tiktok.com/@"))
+
+            discarded = state["ideas"][0]
+            self.assertEqual(len(client.delete(f"/api/radar/ideas/{discarded['id']}").json()["ideas"]), 4)
+            self.assertEqual(client.delete("/api/radar/ideas/nada").status_code, 404)
+            client.post("/api/radar/ideas")
+            state = self.wait(client, lambda s: not s["making_ideas"])
+            # Ni lo mostrado ni lo descartado se repite: el demo solo tiene 2 temas más.
+            self.assertEqual(len(state["ideas"]), 6)
+            self.assertNotIn(discarded["tema"], [i["tema"] for i in state["ideas"]])
+            client.post("/api/radar/ideas")
+            state = self.wait(client, lambda s: not s["making_ideas"])
+            self.assertIn("No salieron ideas nuevas", state["ideas_error"])
 
     def test_account_search_needs_a_source(self):
         manager = JobManager(TMP / "data-radar-nokey", runner=run_demo)

@@ -1464,11 +1464,11 @@ function radarCounts(title, items) {
 
 async function renderRadar(params) {
   let data = await api("/api/radar");
-  let tab = ["videos", "cuentas", "patrones", "nichos"].includes(params.get("tab")) ? params.get("tab") : "videos";
+  let tab = ["videos", "cuentas", "patrones", "nichos", "ideas"].includes(params.get("tab")) ? params.get("tab") : "videos";
   const filters = { handle: "", days: "14", viral: false, sort: "multiple" };
   let adding = "", nicheTema = "", lastDrawn = "";
 
-  const tabsHtml = () => [["videos", "Videos"], ["cuentas", "Cuentas"], ["patrones", "Patrones"], ["nichos", "Nichos"]]
+  const tabsHtml = () => [["videos", "Videos"], ["cuentas", "Cuentas"], ["patrones", "Patrones"], ["nichos", "Nichos"], ["ideas", "Ideas"]]
     .map(([k, label]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${label}</button>`).join("");
 
   const videosTab = () => {
@@ -1547,6 +1547,8 @@ async function renderRadar(params) {
         ${n.cuentas.some(h => !known.has(h)) ? `<button type="button" class="btn small" data-watch="${esc(n.cuentas.join(","))}">Añadir al Radar y leerlas</button>` : ""}</div>` : ""}
       ${foundAccounts(n)}
       ${n.busqueda_error ? `<p class="small" style="color:var(--warn)" role="alert">${esc(n.busqueda_error)}</p>` : ""}
+      <div class="row">${data.active_niche?.nicho === n.nicho ? `<span class="pill done">Nicho elegido</span>`
+        : `<button type="button" class="btn small primary" data-choose="${esc(run.id)}:${index}">Elegir este nicho</button>`}</div>
       ${data.config.can_search ? `<div class="row"><button type="button" class="btn small" data-search="${esc(run.id)}:${index}" ${n.buscando ? "disabled" : ""}>${n.buscando ? "Buscando cuentas…" : (n.encontradas || []).length ? "Buscar otra vez" : "Buscar cuentas en TikTok"}</button>
         <span class="small muted">Unos $${(data.config.search_results * data.config.cost_per_1000 / 1000 * Math.max(1, (n.busquedas || []).length)).toFixed(2)} en Apify</span></div>` : ""}
     </article>`;
@@ -1569,7 +1571,28 @@ async function renderRadar(params) {
       }).join("") : `<div class="card empty"><span class="big">Aún no hay búsquedas</span>Déjalo vacío para ver todo, o escribe un tema.</div>`}`;
   };
 
-  const bodies = { videos: videosTab, cuentas: accountsTab, patrones: patternsTab, nichos: nichesTab };
+  const ideaCard = i => `
+    <article class="card stack radar-niche">
+      <div class="row"><h3>${esc(i.tema)}</h3><span class="spacer"></span>
+        <button type="button" class="btn small danger" data-discard="${esc(i.id)}">Descartar</button></div>
+      ${i.gancho ? `<p><strong>Gancho:</strong> ${esc(i.gancho)}</p>` : ""}
+      ${i.por_que ? `<p class="small">${esc(i.por_que)}</p>` : ""}
+      ${i.patron ? `<p class="small"><strong>Patrón:</strong> ${esc(i.patron)}</p>` : ""}
+      ${i.cierre ? `<p class="small"><strong>Cierre:</strong> ${esc(i.cierre)}</p>` : ""}
+      ${i.verificar ? `<p class="small muted"><strong>Por verificar:</strong> ${esc(i.verificar)}</p>` : ""}
+      ${i.fuentes.length ? `<div class="row small"><strong>Inspirada en:</strong> ${i.fuentes.map(f => `<a href="${esc(f.url)}" target="_blank" rel="noopener">@${esc(f.handle)} (${fmtCount(f.views)})</a>`).join(" · ")}</div>` : ""}
+    </article>`;
+
+  const ideasTab = () => data.active_niche ? `
+      <div class="row"><div><span class="small muted">Nicho elegido</span><h3>${esc(data.active_niche.nicho)}</h3></div><span class="spacer"></span>
+        <button type="button" class="btn primary" id="make-ideas" ${data.making_ideas ? "disabled" : ""}>${data.making_ideas ? "Pensando…" : "Generar 5 ideas"}</button></div>
+      <p class="small muted">Claude toma el patrón de los virales y de lo que hayas analizado, nunca su tema ni sus frases. Cuantos más videos del nicho analices, mejores ideas. Las descartadas no vuelven a salir.</p>
+      ${data.ideas_error ? `<p class="small" style="color:var(--warn)" role="alert">${esc(data.ideas_error)}</p>` : ""}
+      ${data.making_ideas ? `<p class="small muted loading"><span class="spinner" aria-hidden="true"></span>Pensando ideas…</p>` : ""}
+      ${data.ideas.length ? `<div class="stack">${data.ideas.map(ideaCard).join("")}</div>` : data.making_ideas ? "" : `<div class="card empty"><span class="big">Aún no hay ideas</span>Pulsa «Generar 5 ideas».</div>`}`
+    : `<div class="card empty"><span class="big">Elige un nicho</span>Las ideas salen del nicho que elijas en la pestaña Nichos.</div>`;
+
+  const bodies = { videos: videosTab, cuentas: accountsTab, patrones: patternsTab, nichos: nichesTab, ideas: ideasTab };
   const stateKey = () => JSON.stringify([data, tab]);
 
   function draw(force = true) {
@@ -1610,6 +1633,15 @@ async function renderRadar(params) {
       await act(`/api/radar/accounts/${encodeURIComponent(remove.dataset.remove)}`, { method: "DELETE" });
       return;
     }
+    const choose = ev.target.closest("[data-choose]");
+    if (choose) {
+      const [run, index] = choose.dataset.choose.split(":");
+      await act(`/api/radar/niches/${encodeURIComponent(run)}/${index}/choose`, { method: "POST" });
+      return;
+    }
+    if (ev.target.closest("#make-ideas")) { await act("/api/radar/ideas", { method: "POST" }); return; }
+    const discard = ev.target.closest("[data-discard]");
+    if (discard) { await act(`/api/radar/ideas/${encodeURIComponent(discard.dataset.discard)}`, { method: "DELETE" }); return; }
     const search = ev.target.closest("[data-search]");
     if (search) {
       const [run, index] = search.dataset.search.split(":");
@@ -1651,7 +1683,7 @@ async function renderRadar(params) {
 
   draw();
   poll(async () => {
-    const busy = data.scanning || data.searching || data.videos.some(v => v.analyzing) || data.niche_runs.some(r => r.status === "running");
+    const busy = data.scanning || data.searching || data.making_ideas || data.videos.some(v => v.analyzing) || data.niche_runs.some(r => r.status === "running");
     if (!busy) return;
     data = await api("/api/radar");
     // No repintar mientras se escribe en un campo del Radar.
