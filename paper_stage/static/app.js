@@ -702,6 +702,7 @@ async function renderLibrary(params) {
             ${v.has_video ? `<span class="pill done">Video listo</span>` : `<span class="pill">${v.steps_done}/${v.steps_total} pasos</span>`}
             ${v.qa ? `<span class="pill plain ${v.qa.failed ? "failed" : "done"}">QA ${v.qa.passed}/${v.qa.total}</span>` : ""}
             ${v.verify && !v.verify.ok ? `<span class="pill plain failed" title="La revisión automática encontró problemas">Revisar</span>` : ""}
+            ${v.revision_altas ? `<span class="pill plain failed" title="Correcciones importantes en la pestaña Revisión">${v.revision_altas} por corregir</span>` : ""}
           </div></div>
       </a>`).join("")
       : `<div class="card empty" style="grid-column:1/-1"><span class="big">${filter ? "Sin resultados" : "Aún no hay videos"}</span>${filter ? "" : `<a href="#/">Produce el primero</a>`}</div>`;
@@ -791,6 +792,7 @@ async function renderVideo(slug) {
   const who = `serie=${encodeURIComponent(v.serie)}`;
 
   const tabs = [];
+  if (v.has_video) tabs.push(["revision", "Revisión"]);
   if (publish.titulos || publish.descripcion || publish.descripcion_corta) tabs.push(["publish", "Publicación"]);
   if (script.escenas) tabs.push(["script", "Guion"]);
   if (v.texts["research.md"]) tabs.push(["research", "Investigación"]);
@@ -810,6 +812,7 @@ async function renderVideo(slug) {
         <button class="btn danger" id="delete-video" ${running ? "disabled" : ""}>Borrar</button>
       </div>
     </div>
+    ${v.revision_altas ? `<div class="banner warn"><div><strong>${v.revision_altas === 1 ? "Hay 1 corrección importante" : `Hay ${v.revision_altas} correcciones importantes`} sin aplicar.</strong> Mira la pestaña Revisión.</div></div>` : ""}
     ${v.verify && !v.verify.ok ? `<div class="banner warn"><div><strong>La revisión automática encontró problemas:</strong>
       ${esc(v.verify.checks.filter(c => !c.ok).map(c => `${c.label} (${c.detail})`).join("; "))}. Detalles en la pestaña QA.</div></div>` : ""}
     <div class="video-layout">
@@ -838,6 +841,7 @@ async function renderVideo(slug) {
   $$("input[name=pv]").forEach(r => r.addEventListener("change", () => (r.value === "video" ? showVideo() : stagePreview(player, v))));
 
   const bodies = {
+    revision: () => reviewTab(v),
     publish: () => `
       <div class="stack">
         ${v.has_video ? `<section class="pub-box" id="pub-box" aria-live="polite"><p class="small muted">Cargando…</p></section>` : ""}
@@ -885,6 +889,40 @@ async function renderVideo(slug) {
   $(".tabbar").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) showTab(b.dataset.tab); });
   showTab(tabs[0][0]);
 
+  const bodyEl = $("#tab-body");
+  bodyEl.addEventListener("click", async e => {
+    const seek = e.target.closest("[data-seek]");
+    if (seek) {
+      const player = $("#player video");
+      if (player) { player.currentTime = Number(seek.dataset.seek); player.scrollIntoView({ block: "center" }); }
+      return;
+    }
+    if (e.target.closest("#review-again")) {
+      try { await api(`/api/videos/${encodeURIComponent(v.slug)}/review`, { method: "POST" }); route(); }
+      catch (err) { toast(esc(err.message), "err"); }
+      return;
+    }
+    if (e.target.closest("#apply-fixes")) {
+      const picked = $$("input[data-fix]:checked", bodyEl).map(i => i.dataset.fix);
+      const own = $("#own-fix", bodyEl).value.trim();
+      const correcciones = [...picked, ...(own ? [own] : [])];
+      if (!correcciones.length) { toast("Elige al menos una corrección.", "err"); return; }
+      if (!confirmAction(`¿Aplicar ${correcciones.length} corrección(es)? El agente trabaja sobre este mismo video y gastará crédito de Claude; guarda una copia antes.`)) return;
+      try {
+        const job = await api(`/api/videos/${encodeURIComponent(v.slug)}/corrections`, { method: "POST", body: { correcciones } });
+        watched.set(job.id, job.status);
+        location.hash = `#/trabajo/${job.id}`;
+      } catch (err) { toast(esc(err.message), "err"); }
+    }
+  });
+  // Mientras se revisa, la pestaña se actualiza sola al terminar.
+  if (v.revisando) {
+    poll(async () => {
+      const fresh = await api(`/api/videos/${encodeURIComponent(v.slug)}`);
+      if (!fresh.revisando) route();
+    }, 5000);
+  }
+
   $("#tab-body").addEventListener("click", async e => {
     const btn = e.target.closest("[data-copy]");
     if (!btn) return;
@@ -896,6 +934,54 @@ async function renderVideo(slug) {
     try { await api(`/api/videos/${encodeURIComponent(v.slug)}`, { method: "DELETE" }); toast("Video borrado.", "ok"); location.hash = "#/biblioteca"; }
     catch (err) { toast(esc(err.message), "err"); }
   });
+}
+
+const REVIEW_KIND = { audio: "Audio", imagen: "Imagen", texto: "Texto", comprension: "Comprensión", ritmo: "Ritmo", calidad: "Calidad", portada: "Portada" };
+
+function reviewTab(v) {
+  const r = v.revision;
+  if (v.revisando) return `<p class="small muted loading"><span class="spinner" aria-hidden="true"></span>Revisando audio y video; tarda unos minutos…</p>`;
+  const again = `<button type="button" class="btn small" id="review-again">${r ? "Revisar de nuevo" : "Revisar ahora"}</button>`;
+  if (!r) {
+    return `<div class="stack">${v.revision_error ? `<p class="small" style="color:var(--warn)" role="alert">${esc(v.revision_error)}</p>` : `<p class="small muted">Todavía no se ha revisado este video.</p>`}<div class="row">${again}</div></div>`;
+  }
+  const items = r.sugerencias || [];
+  const stat = (label, value) => `<div class="card"><strong>${esc(value ?? "—")}</strong><span class="small muted">${label}</span></div>`;
+  return `
+    <div class="stack">
+      ${r.resumen ? `<p>${esc(r.resumen)}</p>` : ""}
+      ${v.revision_error ? `<p class="small" style="color:var(--warn)" role="alert">${esc(v.revision_error)}</p>` : ""}
+      ${r.error_vision ? `<p class="small" style="color:var(--warn)" role="alert">${esc(r.error_vision)}</p>` : ""}
+      <div class="radar-stats">
+        ${stat("nota visual sobre 10", r.puntaje_visual)}
+        ${stat("palabras por minuto", r.palabras_minuto)}
+        ${stat("palabras distintas al guion", (r.diferencias || []).length)}
+        ${stat("cortes de escena", r.cortes)}
+      </div>
+      <p class="small muted">Se mide y se transcribe el audio, y se revisa un fotograma cada 3 s. Nadie ha oído el video: <strong>escúchalo tú una vez</strong>, porque la naturalidad y la entonación no se pueden medir.</p>
+      ${items.length ? `<div class="review-list">${items.map(s => `
+        <div class="review-item">
+          <input type="checkbox" id="fix-${esc(s.id)}" data-fix="${esc(s.correccion)}" ${s.gravedad !== "baja" && s.correccion ? "checked" : ""} aria-label="Aplicar esta corrección">
+          ${s.fotograma ? `<img src="/files/${esc(v.slug)}/${esc(s.fotograma)}" alt="" loading="lazy">` : ""}
+          <div class="review-text">
+            <div class="row small">
+              <span class="pill plain ${s.gravedad === "alta" ? "failed" : s.gravedad === "media" ? "running" : ""}">${esc(s.gravedad)}</span>
+              <span class="muted">${esc(REVIEW_KIND[s.tipo] || s.tipo)}</span>
+              <button type="button" class="link-btn" data-seek="${esc(s.t)}">Ver segundo ${esc(Math.round(s.t))}</button>
+              ${s.origen === "medicion" ? `<span class="muted">· medido</span>` : ""}
+            </div>
+            <label for="fix-${esc(s.id)}"><strong>${esc(s.problema)}</strong></label>
+            ${s.correccion ? `<span class="small muted">${esc(s.correccion)}</span>` : ""}
+          </div>
+        </div>`).join("")}</div>` : `<p>No se encontraron problemas.</p>`}
+      <div class="field"><label for="own-fix">Añade tu propia corrección <span class="small muted">(opcional)</span></label>
+        <textarea id="own-fix" rows="2" maxlength="800" placeholder="Por ejemplo: la voz suena plana en el remate"></textarea></div>
+      <div class="row">
+        <button type="button" class="btn primary" id="apply-fixes">Corregir lo seleccionado</button>
+        ${again}
+        <span class="small muted">Se revisó el ${fmtDate(r.created_at)}</span>
+      </div>
+    </div>`;
 }
 
 function copyRow(text) {

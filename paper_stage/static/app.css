@@ -344,6 +344,16 @@ details.advanced .fields-3, details.advanced .fields-2 { margin-top: 12px; }
 .radar-signals { margin: 0; padding-left: 18px; }
 .radar-found { gap: 6px; padding: 10px 12px; border-radius: 10px; background: var(--paper-2); }
 
+/* ------------------------------------------------------------ revisión de un video */
+.review-list { display: grid; gap: 10px; }
+.review-item { display: flex; gap: 12px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper-2); }
+.review-item input { margin-top: 4px; flex: none; accent-color: var(--teal); width: 18px; height: 18px; }
+.review-item img { width: 72px; flex: none; border-radius: 8px; border: 1px solid var(--line); }
+.review-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.review-text label { cursor: pointer; }
+.review-text strong { font-weight: 600; }
+.link-btn { border: 0; background: none; padding: 0; color: var(--ok); cursor: pointer; text-decoration: underline; font: inherit; }
+
 /* ------------------------------------------------------------ detalle de video */
 .video-layout { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 28px; align-items: start; }
 @media (max-width: 900px) { .video-layout { grid-template-columns: 1fr; } }

@@ -28,7 +28,7 @@ DATA_DIR = Path(os.environ.get("PAPER_STAGE_DATA", ROOT / "data"))
 FONTS_DIR = ROOT / "assets" / "fonts"
 # Librerías de animación que el agente puede incrustar en stage.html (las baja setup.sh).
 VENDOR_DIR = ROOT / "assets" / "vendor"
-VENDOR_FILES = ["gsap.min.js", "MorphSVGPlugin.min.js", "CustomEase.min.js"]
+VENDOR_FILES = ["gsap.min.js", "MorphSVGPlugin.min.js", "CustomEase.min.js", "three.min.js"]
 
 DEFAULT_MODEL = "claude-opus-5-5"
 MODELS = ["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-sonnet-5"]
@@ -91,6 +91,21 @@ KICKOFF = {
         "following the pipeline end to end in output/{slug}/. "
         "Do not stop until final.mp4 exists and both QA passes are done. "
         "(The system prompt is in Spanish; everything you produce must be in English.)"
+    ),
+}
+
+CORRECT = {
+    "es": (
+        "Este video ya existe en output/{slug}/. Corrige SOLO esto, sin rehacer lo demás:\n{correcciones}\n\n"
+        "Reutiliza los scripts de tools/. Antes de sobrescribir final.mp4, mix.wav o music.wav, guarda una copia en "
+        "backup/. Si solo cambia el audio, remultiplexa sin recodificar el video. Si cambia stage.html, vuelve a "
+        "renderizar solo si hace falta. Comprueba cada corrección en fotogramas o midiendo, anótala en qa.md y deja final.mp4 listo."
+    ),
+    "en": (
+        "This video already exists in output/{slug}/. Fix ONLY this, without redoing anything else:\n{correcciones}\n\n"
+        "Reuse the scripts in tools/. Before overwriting final.mp4, mix.wav or music.wav, keep a copy in backup/. "
+        "If only the audio changes, remux without re-encoding the video. Check each fix on frames or by measuring, "
+        "note it in qa.md and leave final.mp4 ready. (The system prompt is in Spanish; everything you produce must be in English.)"
     ),
 }
 
@@ -209,6 +224,7 @@ class VideoRequest:
     cta: str = ""
     notas: str = ""    # indicaciones que el usuario ve y aprueba en el Estudio
     inspiracion: list[str] = field(default_factory=list)  # videos del Radar: para avisar si el guion se les parece
+    correcciones: list[str] = field(default_factory=list)  # si hay, el trabajo corrige un video ya hecho
     extra: dict = field(default_factory=dict)
     # Copia de la serie al crear el trabajo: editarla después no cambia un video a medias.
     serie: dict = field(default_factory=dict)
@@ -249,6 +265,7 @@ class VideoRequest:
         if len(self.notas) > 1500:
             raise ValueError("Las indicaciones deben tener 1500 caracteres como máximo.")
         self.inspiracion = [str(i) for i in self.inspiracion if str(i).isdigit()][:6]
+        self.correcciones = [_clean(c)[:800] for c in self.correcciones if _clean(c)][:20]
         self.slug = slugify(self.slug or f"{self.tema}-{self.idioma}")
 
     @property
@@ -361,6 +378,8 @@ def render_prompt(variables: dict[str, str]) -> str:
 
 
 def kickoff_prompt(req: VideoRequest, resume: bool = False) -> str:
+    if req.correcciones:
+        return CORRECT[req.idioma].format(slug=req.slug, correcciones="\n".join(f"- {c}" for c in req.correcciones))
     template = (RESUME if resume else KICKOFF)[req.idioma]
     return template.format(tema=req.tema, slug=req.slug, serie=req.ficha.nombre)
 

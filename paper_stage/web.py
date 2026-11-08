@@ -24,6 +24,7 @@ from . import core, library
 from .jobs import TERMINAL, JobManager
 from .publishing import TEST_SLUG, PublishError, PublishRequest, Publisher, default_text, text_units
 from .radar import Radar, RadarError
+from .review import review_video
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -139,6 +140,12 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             parts = demo_radar_parts()
         radar = Radar(manager.store.db, manager.data_dir, used_topics=manager.used_topics, **parts)
     manager.source_texts = radar.transcripts
+    if manager.reviewer is None:
+        if demo:
+            from .demo import review_demo
+            manager.reviewer = review_demo
+        else:
+            manager.reviewer = review_video
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -461,7 +468,26 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         if not data:
             return _error("Video no encontrado.", 404)
         data["jobs"] = [j for j in manager.store.list() if j["slug"] == slug]
+        data["revisando"], data["revision_error"] = manager.reviewing(slug), manager.review_errors.get(slug)
         return JSONResponse(data)
+
+    async def video_review(request: Request):
+        try:
+            manager.start_review(request.path_params["slug"])
+        except ValueError as exc:
+            return _error(str(exc), 409)
+        return JSONResponse({"ok": True})
+
+    async def video_corrections(request: Request):
+        try:
+            payload = await _json(request)
+            texts = payload.get("correcciones")
+            if not isinstance(texts, list):
+                raise ValueError("Elige al menos una corrección.")
+            job = manager.create_correction(request.path_params["slug"], [str(t) for t in texts])
+        except ValueError as exc:
+            return _error(str(exc), 409)
+        return JSONResponse(job, status_code=201)
 
     async def delete_video(request: Request):
         slug = request.path_params["slug"]
@@ -523,6 +549,8 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Route("/api/videos", list_videos),
         Route("/api/videos/{slug}", get_video),
         Route("/api/videos/{slug}", delete_video, methods=["DELETE"]),
+        Route("/api/videos/{slug}/review", video_review, methods=["POST"]),
+        Route("/api/videos/{slug}/corrections", video_corrections, methods=["POST"]),
         Route("/api/videos/{slug}/publish", video_publish, methods=["GET", "POST"]),
         Route("/api/videos/{slug}/publish/manual", video_mark_published, methods=["POST"]),
         Route("/api/videos/{slug}/publish/{pub_id:int}", video_mark_published, methods=["DELETE"]),

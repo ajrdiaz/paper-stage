@@ -25,7 +25,7 @@ from paper_stage import core, library  # noqa: E402
 from paper_stage.demo import (LINES, analyze_demo, demo_account_search, demo_radar_source,  # noqa: E402
                               find_niches_demo, make_ideas_demo, run_demo)
 from paper_stage.jobs import JobManager  # noqa: E402
-from paper_stage import publishing, radar  # noqa: E402
+from paper_stage import publishing, radar, review  # noqa: E402
 
 # Las pruebas nunca deben escribir en el Google Drive real de quien las ejecuta.
 publishing.drive_roots = lambda: []
@@ -341,6 +341,53 @@ class AppTests(unittest.TestCase):
             self.assertEqual(client.get("/api/series/coral-2").status_code, 404)
             self.assertIsNone(client.app.state.publisher.channel_for("coral-2"))  # su cuenta no queda huérfana
 
+    def test_review_and_corrections(self):
+        with self.make_client(data="data-review") as client:
+            job = client.post("/api/jobs", json={"tema": "Los dedos"}).json()
+            job = wait_for(client, job["id"], {"done", "failed"})
+            slug = job["slug"]
+            # La revisión corre sola al terminar y sus correcciones llegan a la ficha y a la biblioteca.
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                video = client.get(f"/api/videos/{slug}").json()
+                if not video["revisando"] and video["revision"]:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(video["revision"]["sugerencias"][0]["gravedad"], "alta")
+            self.assertEqual(video["revision_altas"], 1)
+            self.assertEqual(next(v for v in client.get("/api/videos").json() if v["slug"] == slug)["revision_altas"], 1)
+
+            self.assertEqual(client.post(f"/api/videos/{slug}/corrections", json={"correcciones": []}).status_code, 409)
+            self.assertEqual(client.post(f"/api/videos/{slug}/corrections", json={"correcciones": "x"}).status_code, 409)
+            self.assertEqual(client.post("/api/videos/no-existe/corrections", json={"correcciones": ["x"]}).status_code, 409)
+            res = client.post(f"/api/videos/{slug}/corrections", json={"correcciones": ["Agranda   los subtítulos"]})
+            self.assertEqual(res.status_code, 201, res.text)
+            fix = res.json()
+            self.assertEqual((fix["slug"], fix["request"]["correcciones"]), (slug, ["Agranda los subtítulos"]))  # misma carpeta
+            self.assertEqual(client.post(f"/api/videos/{slug}/corrections", json={"correcciones": ["y"]}).status_code, 409)  # ya en curso
+            prompt = core.kickoff_prompt(core.VideoRequest(**fix["request"]))
+            self.assertIn("Corrige SOLO esto", prompt)
+            self.assertIn("- Agranda los subtítulos", prompt)
+            self.assertIn("backup/", prompt)
+            fix = wait_for(client, fix["id"], {"done", "failed"})
+            self.assertEqual(fix["status"], "done", fix["error"])
+            self.assertFalse((core.OUTPUT_DIR / f"{slug}-2").exists())
+            self.assertEqual(client.post("/api/videos/no-existe/review").status_code, 409)
+
+    def test_failed_review_does_not_touch_the_finished_video(self):
+        async def broken(out_dir, serie=None):
+            raise RuntimeError("sin Whisper")
+
+        with self.make_client(data="data-review-fail") as client:
+            client.app.state.manager.reviewer = broken
+            job = client.post("/api/jobs", json={"tema": "Las uñas"}).json()
+            job = wait_for(client, job["id"], {"done", "failed"})
+            self.assertEqual(job["status"], "done")
+            deadline = time.time() + 10
+            while time.time() < deadline and client.app.state.manager.reviewing(job["slug"]):
+                time.sleep(0.02)
+            self.assertIn("sin Whisper", client.get(f"/api/videos/{job['slug']}").json()["revision_error"])
+
     def test_script_is_compared_with_its_sources(self):
         with self.make_client(data="data-similar") as client:
             # El demo usa estas frases en su guion: un guion copiado debe avisarse en la revisión.
@@ -628,6 +675,61 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
 def radar_row(handle, video_id, views, pinned=False, created=None):
     return {"id": video_id, "handle": handle, "views": views, "pinned": pinned, "duration": 65,
             "created_at": created or time.time() - 86400}
+
+
+class ReviewTests(unittest.TestCase):
+    def heard(self, text, start=0.0):
+        return [{"word": w, "start": start + i, "end": start + i + .5, "prob": .9} for i, w in enumerate(text.split())]
+
+    def test_speech_is_compared_with_the_script(self):
+        # Lo que pasó de verdad en el primer video: se comió la «E» de «Etiqueta» y cambió una vocal.
+        expected = "Etiqueta a quien sale. Sobra piel y se pliega, ¿para qué?"
+        diffs = review.compare_speech(expected, self.heard("Tiqueta a quien sale sobre piel y se pliega para que", 10))
+        self.assertEqual([(d["esperado"], d["oido"]) for d in diffs], [("etiqueta", "tiqueta"), ("sobra", "sobre")])
+        self.assertEqual(diffs[0]["t"], 10.0)
+        self.assertEqual(review.compare_speech("¿Para qué?", self.heard("para que")), [])  # tildes y signos no cuentan
+        self.assertEqual(review.compare_speech("Hola", []), [{"t": 0.0, "esperado": "hola", "oido": ""}])
+
+    def test_measures_become_suggestions(self):
+        found = review.measured_suggestions({
+            "diferencias": [{"t": 57.7, "esperado": "etiqueta", "oido": "tiqueta"}, {"t": 3.0, "esperado": "", "oido": "eh"}],
+            "inseguras": [{"t": 1.0, "word": "Tus", "prob": .11}], "palabras_minuto": 220, "pausas": [(30.0, 2.0)],
+            "pico_db": 0.0, "congelados": [(12.0, 4.0)], "negros": [(5.0, 1.0)]})
+        kinds = [(s["gravedad"], s["tipo"]) for s in found]
+        self.assertIn(("alta", "audio"), kinds)
+        self.assertEqual(sum(s["gravedad"] == "alta" for s in found), 4)  # palabra, saturación, congelado y negro
+        self.assertTrue(all(s["origen"] == "medicion" and s["correccion"] for s in found))
+        self.assertFalse(any("(nada)" in s["problema"] and "«eh»" in s["problema"] for s in found))  # muletilla de Whisper
+        self.assertEqual(review.measured_suggestions({"palabras_minuto": 165, "pico_db": -1.0}), [])
+
+    def test_video_filters_are_parsed(self):
+        log = ("[freezedetect] lavfi.freezedetect.freeze_start: 12.5\n[freezedetect] lavfi.freezedetect.freeze_duration: 3.2\n"
+               "[blackdetect] black_start:1.5 black_end:2 black_duration:0.5\n"
+               "lavfi.scene_score=0.4\nlavfi.scene_score=0.5\n")
+        self.assertEqual(review.parse_video_filters(log), {"congelados": [(12.5, 3.2)], "negros": [(1.5, 0.5)], "cortes": 2})
+
+    def test_claude_suggestions_are_cleaned(self):
+        clean = review.clean_suggestions([
+            {"gravedad": "ALTA", "t": "12", "tipo": "Comprensión", "problema": "x", "correccion": "y"},
+            {"gravedad": "rara", "t": "nunca", "tipo": "otro", "problema": "z"}, {"problema": ""}, "texto"])
+        self.assertEqual([(c["gravedad"], c["t"], c["tipo"]) for c in clean], [("alta", 12.0, "comprension"), ("media", 0.0, "calidad")])
+        self.assertEqual(review.clean_suggestions("nada"), [])
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "hace falta ffmpeg")
+    def test_frames_every_few_seconds_and_saved_in_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out, video = Path(tmp), Path(tmp) / "v.mp4"
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=s=128x128:r=24:d=10",
+                            "-pix_fmt", "yuv420p", str(video)], check=True, capture_output=True)
+            frames = review.extract_frames(video, out / "revision")
+            self.assertEqual([f["t"] for f in frames], [0, 3, 6, 9])
+            self.assertTrue((out / frames[1]["archivo"]).exists())
+            measured = review.measure_video(video)
+            self.assertEqual(measured["negros"], [])
+            saved = review.save(out, {"fotogramas": frames, "sugerencias": [
+                {"gravedad": "baja", "t": 1, "problema": "a"}, {"gravedad": "alta", "t": 8, "problema": "b"}]})
+            self.assertEqual([(s["id"], s["problema"], s["fotograma"]) for s in saved["sugerencias"]],
+                             [("s1", "b", "revision/t009.jpg"), ("s2", "a", "revision/t000.jpg")])
 
 
 class RadarUnitTests(unittest.TestCase):

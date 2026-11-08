@@ -27,7 +27,7 @@ Todo lo visible y audible va en `{{IDIOMA}}`. Si generas la versión `en` de un 
 1. **Investigación** → `research.md`: 4–6 datos correctos y verificables, con su fuente. Si no puedes verificar un dato, no lo uses. Elige el dato más contraintuitivo como gancho.
 2. **Biblia visual** → `bible.md` con las 5 secciones del §3 (Estilo, Presentador, Transiciones, Escenas, Sonido y técnica). **Escríbela antes del guion**, aunque reutilices piezas de un video anterior: la app sigue el progreso por los archivos de cada paso.
 3. **Guion** → `script.json` (§5), a partir de `bible.md`, con 7 escenas y una línea de narración por escena.
-4. **Voz** (§6): una WAV por escena en `audio/scene_XX.wav`. Mide cada una con `ffprobe`.
+4. **Voz** (§6): una WAV por escena en `audio/scene_XX.wav`. Mide cada una con `ffprobe` y compruébala: no puedes oírla, así que transcríbela (§6).
 5. **Ajuste de tiempos** → `timeline.json`: las duraciones reales del audio (más 0.2–0.5 s de respiro visual) definen cada escena. Si el total queda fuera de 61–70 s, reescribe líneas (no aceleres por encima de 1.12×) y repite el paso 4. **Nunca** dejes que una línea se pase del tiempo de su escena.
 6. **Datos de sincronía**: une las WAV de las escenas en `voice.wav`, cada una en su tiempo de `timeline.json` (la app mide ahí cuándo empieza la voz). Después, `faster-whisper` (modelo `small`, local) → `words.json` para los subtítulos; envolvente de amplitud de la voz a 24 fps → `mouth.json` (0 = silencio, 1 = voz fuerte), que puede mover la boca de un presentador o pulsar los elementos en pantalla.
 7. **Animación**: una sola página `stage.html` autocontenida (HTML + SVG/Canvas + JS, sin CDNs) con un reloj determinista (§7).
@@ -133,21 +133,28 @@ Siete escenas con título, rango de tiempo, descripción visual, `VO:` (la líne
 ## 6. Voz (TTS local, costo cero)
 
 - **Principal: Kokoro-82M** (`pip install kokoro soundfile`; requiere `espeak-ng`). **Fallback: Piper** (`pip install piper-tts`).
-- Genera una WAV por escena. Recorta los silencios de los extremos con `silenceremove` y añade 120–250 ms de silencio al final de cada escena.
+- Genera una WAV por escena, con 30–60 ms de silencio al inicio de cada frase: Kokoro y `silenceremove` pueden comerse una vocal inicial ("Etiqueta" sonó "Tiqueta"). Recorta los extremos con un umbral bajo y sin tocar la voz, y añade 120–250 ms de silencio al final de cada escena.
+- **No puedes oír el audio: compruébalo transcribiendo.** Pasa cada WAV por `faster-whisper` sin prompt y compara palabra por palabra con la línea del guion. Si una palabra sale distinta, se pronuncia mal o se corta: cambia su grafía solo en el texto que va al TTS o reordena la frase, y repite hasta que coincidan.
 - Si hace falta ajustar el tono: `rubberband=pitch=…` (fallback: `asetrate` + `atempo`). No pases de 1.05 ni bajes de 0.95.
 - Escribe cifras y siglas como se dicen ("mil novecientos setenta y cuatro"), y los nombres propios extranjeros con la ortografía que el TTS pronuncia bien (solo en el texto que va al TTS; en los subtítulos, la ortografía correcta).
 
 ## 7. Animación: `stage.html` determinista
 
-- Un único archivo HTML autocontenido, sin CDNs. Usa todo lo que dé calidad: SVG con gradientes y filtros de brillo y desenfoque, Canvas 2D para partículas y volumen, y capas con parallax. La única librería permitida es GSAP, incrustada desde `assets/vendor/` (ver abajo). Las fuentes están en `assets/fonts/`: se incrustan en base64.
+- Un único archivo HTML autocontenido, sin CDNs. Usa todo lo que dé calidad: SVG con gradientes y filtros de brillo y desenfoque, Canvas 2D para partículas y volumen, y capas con parallax; si el estilo de la serie pide 3D, Three.js (ver abajo). Las únicas librerías permitidas son GSAP y Three.js, incrustadas desde `assets/vendor/`. Las fuentes están en `assets/fonts/`: se incrustan en base64.
 - **Reloj determinista obligatorio:** expón `window.renderAt(tSeconds)`, que dibuja el frame exacto para ese instante como función pura del tiempo. Nada de `requestAnimationFrame`, `setTimeout` ni `Math.random()` sin semilla (usa un PRNG con semilla, p. ej. mulberry32). Expón también `window.DURATION`. `renderAt` **no devuelve nada**: si devuelve un objeto (como una timeline de GSAP), `page.evaluate` intenta serializarlo y el render se cuelga.
 - **Movimiento con GSAP (recomendado):** en `assets/vendor/` están `gsap.min.js` (3.15), `MorphSVGPlugin.min.js` y `CustomEase.min.js` (gratuitos, también para uso comercial). Incrusta su contenido en un `<script>` de `stage.html`; si no están, anima a mano. Úsala para curvas de aceleración, secuencias con solapes y transformaciones de forma. Reglas para que siga siendo determinista:
   - Todo va en **una** `gsap.timeline({ paused: true })` construida al cargar la página, con cada escena en su tiempo de `timeline.json`. Nada de tweens sueltos fuera de ella, `repeat: -1`, `gsap.delayedCall`, ni `onUpdate`/`onComplete` que acumulen estado.
   - `renderAt(t)` hace `tl.seek(t, false)` y después dibuja lo que no es de GSAP: partículas, subtítulos y gancho escrito.
   - Nada de aleatoriedad de GSAP (`gsap.utils.random`, `stagger` con `from: "random"`): usa valores del PRNG con semilla.
   - Una timeline en pausa movida con `seek` da el mismo frame en cualquier orden; compruébalo en el QA previo.
+- **3D con Three.js** (`assets/vendor/three.min.js`, r159, expone `THREE` global; incrústalo en un `<script>`). Úsalo si el estilo de la serie lo pide:
+  - `new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true })`, con `setPixelRatio(1)`. Nunca `setAnimationLoop` ni `THREE.Clock`: `renderAt(t)` coloca todo en función de `t` y llama una vez a `renderer.render(scene, camera)`. El texto y los subtítulos van en HTML encima del canvas.
+  - Sin modelos externos: construye la geometría por código (`LatheGeometry`, `TubeGeometry`, `CapsuleGeometry`, `ExtrudeGeometry` y superficies a medida) con muchos segmentos, para que las formas sean orgánicas y no un cilindro con esferas. Para lo translúcido, un `ShaderMaterial` con efecto fresnel y mezcla aditiva da mejor resultado que `transmission`, que es muy lento.
+  - Luz, niebla (`FogExp2`), partículas con PRNG con semilla y una cámara que se mueve siempre: entra en el objeto y sale por el siguiente. Antes de animar nada, renderiza un fotograma, **míralo** y mejora la forma hasta que se vea profesional.
+  - Abre la página con WebGL por software: `p.chromium.launch(args=["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"])`, tanto para las muestras como para el render. Es lento: mide un fotograma antes de render y baja la complejidad si tarda más de 3 s.
 - **Gancho escrito (`texto_gancho`):** 6 palabras como máximo, muy grande y con buen contraste, dentro de la zona segura. Debe **leerse completo en el frame 1**: nada de aparecer con fundido desde cero. Se queda hasta ~3 s y luego se transforma o sale con movimiento. Dice la idea del gancho hablado, no el nombre del tema.
-- **Subtítulos karaoke** desde `words.json`, dentro de un elemento con `id="subs"`: 1–2 líneas y pocas palabras a la vez, fuente redondeada y gruesa de 64–80 px, texto claro con contorno o sombra oscura para que se lea sobre cualquier imagen, y la palabra activa en un color de acento de la paleta, con un pequeño rebote.
+- **Subtítulos karaoke** desde `words.json`, dentro de un elemento con `id="subs"`: 1–2 líneas y pocas palabras a la vez, fuente redondeada y gruesa de 76–92 px, texto claro con contorno oscuro grueso para que se lea sobre cualquier imagen, y la palabra activa en un color de acento de la paleta, con un pequeño rebote. **No tapan al sujeto:** compón cada escena con lo importante por encima de y≈1150.
+- **Cada objeto se reconoce sin narración.** Si lo tapas con la mano, ¿alguien adivina qué es? Una analogía que no se reconoce confunde: una esponja que parece queso, o piel que parece una concha. Si no sale, elige otra imagen o rotúlala con una palabra.
 - Los tiempos de cada escena salen de `timeline.json`, incrustado en el HTML.
 - Mientras la construyes, captura frames de muestra con Playwright y **míralos** (Read) para comprobar la calidad; la revisión completa va en el QA previo (§10).
 
@@ -189,7 +196,8 @@ Marca cada punto con `[x]` o `[ ]` y anota la medida real. Un punto sin cumplir 
 - [ ] `mix.wav` a −14 LUFS ±1.
 - [ ] Música respecto a la voz (§8), medida con la misma cadena de ducking que la mezcla: RMS en ventanas de 100 ms, separando las ventanas con voz (> −35 dBFS en `voice.wav`) de los huecos. Debe quedar a −20 dB ±2 bajo la voz y a −12 dB ±2 en los huecos.
 - [ ] Determinismo: captura tres instantes en orden, luego en orden inverso y uno más en una página recién cargada; los píxeles del mismo instante deben coincidir.
-- [ ] Captura `stage.html` con `renderAt` cada 3 s, más el primer y el último frame, y **míralos todos**: calidad profesional y estilo de la serie (como en sus videos anteriores, si los hay), nada fuera de la zona segura, subtítulos legibles y sin cortar, sin frames vacíos, movimiento en el frame 1, y el primero y el último se parecen (loop).
+- [ ] Voz: cada WAV transcrita con `faster-whisper` sin prompt coincide con su línea del guion, palabra por palabra.
+- [ ] Captura `stage.html` con `renderAt` cada 3 s, más el primer y el último frame, y **míralos todos**: cada objeto se reconoce sin narración, los subtítulos no tapan al sujeto, calidad profesional y estilo de la serie (como en sus videos anteriores, si los hay), nada fuera de la zona segura, subtítulos legibles y sin cortar, sin frames vacíos, movimiento en el frame 1, y el primero y el último se parecen (loop).
 - [ ] Cada dato del guion está respaldado en `research.md`, con su fuente, y el tema está contado desde el nicho de la serie.
 - [ ] Contenido (§2): sin diagnósticos, tratamientos, dosis ni remedios; sin frases ni ejemplos copiados de otros videos.
 - [ ] Comprensión: lee cada `vo` como alguien que la oye una sola vez mientras hace scroll. Si una línea necesita contexto que no está en la frase, reescríbela.
@@ -203,7 +211,7 @@ Marca cada punto con `[x]` o `[ ]` y anota la medida real. Un punto sin cumplir 
 - [ ] Extrae de `final.mp4` un frame a mitad de cada escena y **míralos**: se ven como en el QA previo, sin artefactos de compresión ni frames negros.
 - [ ] `publish.json`: exactamente 5 hashtags, `descripcion_corta` de 150 caracteres como máximo y títulos de 60 como máximo.
 
-Al terminar, la app vuelve a medir por su cuenta lo técnico, cuándo empieza la voz en `voice.wav`, `texto_gancho` y `publish.json`, y avisa si algo no cumple aunque `qa.md` diga lo contrario.
+Al terminar, la app vuelve a medir por su cuenta lo técnico, cuándo empieza la voz en `voice.wav`, `texto_gancho` y `publish.json`, transcribe la voz y la compara con el guion, y revisa fotogramas del video: las correcciones que encuentre se le muestran al usuario, aunque `qa.md` diga lo contrario.
 
 ## 11. `publish.json`
 
@@ -222,7 +230,7 @@ Al terminar, la app vuelve a medir por su cuenta lo técnico, cuándo empieza la
 }
 ```
 
-La app genera `portada.jpg` a tamaño completo con estos campos: dibuja `stage.html` en `frame_portada_s`, oculta los subtítulos y escribe `texto_portada` en grande en su lugar. Por eso `frame_portada_s` debe caer en un momento con la imagen completa y atractiva.
+La app genera `portada.jpg` a tamaño completo con estos campos: dibuja `stage.html` en `frame_portada_s`, oculta los subtítulos y escribe `texto_portada` en grande en su lugar. Por eso `frame_portada_s` debe caer en un momento con la imagen completa y atractiva, después del segundo 3.5, sin el gancho escrito en pantalla: si no, el texto de la portada se repite.
 
 ## 12. Entrega
 

@@ -418,6 +418,24 @@ def demo_radar_parts() -> dict:
             "account_searcher": demo_account_search, "idea_maker": make_ideas_demo, "demo": True}
 
 
+async def review_demo(out_dir: Path, serie: dict | None = None) -> dict:
+    """Una revisión de ejemplo, sin Whisper ni Claude."""
+    from .review import save
+
+    await asyncio.sleep(min(SPEED, 0.2))
+    return save(out_dir, {
+        "resumen": "Modo demostración: aquí va la opinión de Claude sobre el video.", "puntaje_visual": 6,
+        "duracion": 62.5, "palabras_minuto": 165, "pico_db": -1.0, "cortes": 12, "congelados": [], "negros": [],
+        "fotogramas": [], "transcripcion": "Modo demostración.", "diferencias": [{"t": 57.7, "esperado": "etiqueta", "oido": "tiqueta"}],
+        "sugerencias": [
+            {"origen": "medicion", "gravedad": "alta", "t": 57.7, "tipo": "audio", "problema": "El guion dice «etiqueta», pero se transcribe «tiqueta».",
+             "correccion": "Regenera esa frase del TTS sin recortar el inicio de la palabra."},
+            {"origen": "claude", "gravedad": "media", "t": 9.0, "tipo": "imagen", "problema": "La esponja parece un queso.",
+             "correccion": "Dibuja la esponja con poros irregulares y color uniforme."},
+        ],
+    })
+
+
 def demo_publisher_parts(data_dir: Path) -> dict:
     """Drive y Buffer simulados para el modo demo: sin red, sin cuentas y sin publicar nada."""
     from .publishing import BUFFER_API

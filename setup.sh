@@ -64,6 +64,12 @@ for f in gsap.min.js MorphSVGPlugin.min.js CustomEase.min.js; do
     || { rm -f "$out"; echo "Aviso: no se pudo descargar $f (el agente animará a mano)." >&2; }
 done
 
+echo "==> Three.js (licencia MIT) → assets/vendor/"
+# r159 es la última versión con el archivo global three.min.js, fácil de incrustar en stage.html.
+out="assets/vendor/three.min.js"
+[ -f "$out" ] || curl -fsSL "https://cdn.jsdelivr.net/npm/three@0.159.0/build/three.min.js" -o "$out" \
+  || { rm -f "$out"; echo "Aviso: no se pudo descargar Three.js (las series en 3D no podrán renderizarse)." >&2; }
+
 echo "==> Precarga de modelos locales (Kokoro, faster-whisper small)"
 .venv/bin/python - <<'PY' || echo "Aviso: no se pudieron precargar los modelos (¿acceso a huggingface.co?). Se descargarán en el primer uso." >&2
 from kokoro import KPipeline

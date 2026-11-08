@@ -173,6 +173,10 @@ class JobManager:
         self.seq: dict[str, int] = {}
         # Transcripciones de los videos que inspiraron un guion (las pone la web, desde el Radar).
         self.source_texts: Callable[[list[str]], list[str]] = lambda ids: []
+        # Revisión de audio y video de un video terminado (la pone la web).
+        self.reviewer: Callable | None = None
+        self.reviews: dict[str, asyncio.Task] = {}
+        self.review_errors: dict[str, str] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
         self.stopping = False
 
@@ -189,6 +193,8 @@ class JobManager:
 
     async def stop(self) -> None:
         self.stopping = True
+        for task in self.reviews.values():
+            task.cancel()
         tasks = [*self.running.values(), *self.workers]
         for job_id, task in self.running.items():
             if job_id not in self.cancel_requested:  # no interrumpir un cierre ya en curso
@@ -258,6 +264,51 @@ class JobManager:
         self.emit(job_id, {"kind": "status", "status": "queued"})
         self.queue.put_nowait(job_id)
         return self.get(job_id)
+
+    def create_correction(self, slug: str, correcciones: list[str]) -> dict:
+        """Un trabajo nuevo que corrige un video ya hecho, en su misma carpeta: no pasa por la
+        comprobación de temas repetidos porque no es un tema nuevo."""
+        out_dir = library.slug_dir(slug)
+        if not (out_dir / "final.mp4").exists():
+            raise ValueError("Este video todavía no tiene final.mp4.")
+        if slug in self.active_slugs():
+            raise ValueError("Ya hay un trabajo en curso para este video.")
+        previous = next((j["request"] for j in self.store.list() if j["slug"] == slug), None)
+        if previous is None:  # hecho desde la terminal
+            script = library.read_json(out_dir / "script.json")
+            serie = self.series.get(library.script_serie(script)) or self.series.list()[0]
+            previous = {"tema": library.summary(out_dir)["title"], "serie": serie.to_dict(),
+                        "idioma": (script or {}).get("idioma") or serie.idioma, "formato": (script or {}).get("formato") or "vertical"}
+        req = core.VideoRequest(**{**previous, "correcciones": correcciones, "slug": slug})
+        req.validate()
+        if not req.correcciones:
+            raise ValueError("Elige al menos una corrección.")
+        job_id = uuid.uuid4().hex[:10]
+        self.store.insert({"id": job_id, "slug": slug, "request": json.dumps(asdict(req), ensure_ascii=False),
+                           "status": "queued", "created_at": time.time()})
+        self.emit(job_id, {"kind": "status", "status": "queued"})
+        self.queue.put_nowait(job_id)
+        return self.get(job_id)
+
+    def start_review(self, slug: str) -> None:
+        """Revisa audio y video en segundo plano: el video ya está listo y esto tarda unos minutos."""
+        out_dir = library.slug_dir(slug)
+        if not self.reviewer or not (out_dir / "final.mp4").exists():
+            raise ValueError("Este video todavía no se puede revisar.")
+        if slug in self.reviews and not self.reviews[slug].done():
+            raise ValueError("Ya se está revisando este video.")
+        self.review_errors.pop(slug, None)
+        previous = next((j["request"] for j in self.store.list() if j["slug"] == slug), {})
+        self.reviews[slug] = asyncio.create_task(self._review(slug, out_dir, previous.get("serie")))
+
+    async def _review(self, slug: str, out_dir: Path, serie: dict | None) -> None:
+        try:
+            await self.reviewer(out_dir, serie)
+        except Exception as exc:  # noqa: BLE001 — un fallo aquí no debe afectar al video terminado
+            self.review_errors[slug] = f"{type(exc).__name__}: {exc}"[:300]
+
+    def reviewing(self, slug: str) -> bool:
+        return slug in self.reviews and not self.reviews[slug].done()
 
     def get(self, job_id: str) -> dict | None:
         job = self.store.get(job_id)
@@ -465,6 +516,8 @@ class JobManager:
                 self.emit(job_id, {"kind": "text",
                                    "text": "Revisión automática de la app, no cumple: " + "; ".join(failed)})
             self._set_status(job_id, "done", finished_at=time.time())
+            if self.reviewer and not self.reviewing(req.slug):
+                self.start_review(req.slug)
         else:
             if not result:
                 error = "El agente terminó sin enviar un resultado."

@@ -98,6 +98,7 @@ def _cover_time(publish: dict) -> float:
         return 1.5
 
 
+STAGE_BROWSER_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]  # WebGL sin ventana, para stage.html en 3D
 HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
@@ -110,12 +111,9 @@ def _fresh(target: Path, *sources: Path) -> bool:
 # (color_acento en publish.json), reduciéndolo hasta que quepa.
 _COVER_JS = """({text, color}) => {
   const subs = document.getElementById("subs");
-  let box = {x: innerWidth * .08, y: innerHeight * .77, w: innerWidth * .84, h: innerHeight * .1};
-  if (subs) {
-    const r = subs.getBoundingClientRect();
-    if (r.width && r.height) box = {x: r.left, y: r.top, w: r.width, h: r.height};
-    subs.style.visibility = "hidden";
-  }
+  // Grande y en la zona segura: la caja de los subtítulos puede ser muy pequeña para una portada.
+  const box = {x: innerWidth * .08, y: innerHeight * .6, w: innerWidth * .8, h: innerHeight * .2};
+  if (subs) subs.style.visibility = "hidden";
   if (!text) return;
   const el = document.createElement("div");
   Object.assign(el.style, {
@@ -123,7 +121,8 @@ _COVER_JS = """({text, color}) => {
     display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",
     padding: "0 " + box.w * .04 + "px", boxSizing: "border-box",
     fontFamily: "'Fredoka', sans-serif", fontWeight: "700", lineHeight: "1.05",
-    color, textShadow: "0 4px 18px rgba(0, 0, 0, .75)", zIndex: 99999,
+    color, WebkitTextStroke: "3px rgba(0, 0, 0, .85)", paintOrder: "stroke fill",
+    textShadow: "0 6px 24px rgba(0, 0, 0, .8)", zIndex: 99999,
   });
   el.textContent = text;
   document.body.appendChild(el);
@@ -151,7 +150,7 @@ def cover(out_dir: Path) -> Path | None:
         return None
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = p.chromium.launch(args=STAGE_BROWSER_ARGS)
             try:
                 page = browser.new_page(viewport={"width": size[0], "height": size[1]})
                 page.goto(stage.resolve().as_uri())
@@ -360,6 +359,11 @@ def script_serie(script: dict | None) -> str:
     return slugify(str(value)) if value else DEFAULT_SERIE.id
 
 
+def _serious_suggestions(out_dir: Path) -> int:
+    review = read_json(out_dir / "revision.json")
+    return sum(s.get("gravedad") == "alta" for s in review.get("sugerencias", [])) if isinstance(review, dict) else 0
+
+
 def summary(out_dir: Path) -> dict:
     script = read_json(out_dir / "script.json")
     script = script if isinstance(script, dict) else {}
@@ -379,6 +383,7 @@ def summary(out_dir: Path) -> dict:
         "steps_done": sum(s["done"] for s in steps),
         "steps_total": len(steps),
         "qa": qa_summary(out_dir),
+        "revision_altas": _serious_suggestions(out_dir),
         "verify": verify(out_dir, compute=False),
         "updated": max((p.stat().st_mtime for p in out_dir.iterdir()), default=out_dir.stat().st_mtime),
     }
@@ -426,6 +431,7 @@ def detail(slug: str) -> dict | None:
         key=lambda f: f["name"],
     )
     data["has_mix"] = (out_dir / "mix.wav").exists()
+    data["revision"] = read_json(out_dir / "revision.json")
     return data
 
 
