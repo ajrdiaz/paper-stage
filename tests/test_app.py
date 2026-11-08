@@ -676,6 +676,23 @@ class RadarUnitTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(radar.RadarError):
                 radar._extract_json(bad, "[")
 
+    def test_radar_videos_count_as_proof(self):
+        url = radar.video_url("importacrew", "7700576236283759894")
+        answer = [{"nicho": "Coches", "puntaje": 9, "senales": [{"detalle": "5M de vistas", "url": url}]}]
+
+        async def fake_claude(prompt, tools=None, max_turns=1):
+            self.assertIn(url, prompt)
+            self.assertEqual(tools, ["WebSearch", "WebFetch"])  # sin Bash ni herramientas que escriban
+            return json.dumps(answer) + "\n\nSources:\n- [x](https://a.example)", {"https://a.example"}
+
+        original, radar.ask_claude = radar.ask_claude, fake_claude
+        try:
+            items, found = asyncio.run(radar.find_niches("", [{"handle": "importacrew", "views": 5_000_000, "url": url, "text": "x"}]))
+        finally:
+            radar.ask_claude = original
+        niche = radar.clean_niches(items, found)[0]
+        self.assertEqual((niche["puntaje"], niche["senales"][0]["url"]), (9, url))
+
     def test_niches_only_keep_links_from_the_search(self):
         items = [
             {"nicho": "Con prueba", "puntaje": 9, "cuentas": ["@Real.Cuenta", "no vale!"],

@@ -524,7 +524,7 @@ Reglas:
 - Cada nicho debe dar para al menos 100 videos, ser explicable con animación y no depender de noticias del día.
 - No propongas nichos que exijan consejo médico, legal o financiero personalizado, ni contenido para niños.
 - «cuentas»: usuarios de TikTok reales que viste en la búsqueda. Si no viste ninguno, deja la lista vacía; no inventes.
-- Cada prueba de «senales» lleva la URL exacta donde la viste. Sin fuente, deja «url» vacía. No inventes cifras.
+- Cada prueba de «senales» lleva la URL exacta donde la viste, también si es un video de los <datos>. Sin fuente, deja «url» vacía. No inventes cifras.
 - «busquedas»: 2 frases cortas, como las que alguien escribiría en el buscador de TikTok, para encontrar videos de este nicho.
 - «puntaje» de 1 a 10: demanda, facilidad de producir y hueco para un ángulo propio.
 
@@ -535,7 +535,7 @@ Responde solo con JSON, sin texto alrededor:
 
 
 async def find_niches(tema: str, context: list[dict]) -> tuple[list[dict], set[str]]:
-    lines = [f"- @{v['handle']}: {v['views']} vistas ({v.get('multiple') or '?'}×). {v['text'][:120]}" for v in context]
+    lines = [f"- @{v['handle']}: {v['views']} vistas ({v.get('multiple') or '?'}×). {v['url']} {v['text'][:120]}" for v in context]
     prompt = NICHES_PROMPT.format(
         n=MAX_NICHES, hoy=time.strftime("%Y-%m-%d"), contexto="\n".join(lines) or "(todavía sin datos)",
         tema=f"\n\nEl usuario quiere nichos dentro de este tema: {tema}" if tema else "",
@@ -543,7 +543,8 @@ async def find_niches(tema: str, context: list[dict]) -> tuple[list[dict], set[s
     # Solo buscar y leer: la web es texto de terceros.
     text, found = await ask_claude(prompt, tools=["WebSearch", "WebFetch"], max_turns=14)
     items = _extract_json(text, "[")
-    return (items if isinstance(items, list) else []), found
+    # Un video del Radar es la mejor prueba que hay: cifras medidas, no un artículo.
+    return (items if isinstance(items, list) else []), found | {v["url"] for v in context}
 
 
 def _norm_url(url: str) -> str:
