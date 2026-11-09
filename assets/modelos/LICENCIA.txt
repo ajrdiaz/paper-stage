@@ -1,0 +1,3 @@
+cuerpo-torso.js deriva de «Universal Base Characters» de Quaternius (https://quaternius.com),
+versión Standard gratuita, publicada bajo CC0 1.0 Universal: dominio público, uso comercial sin atribución.
+https://creativecommons.org/publicdomain/zero/1.0/

@@ -121,6 +121,15 @@ class CoreTests(unittest.TestCase):
             self.assertIn(text, prompt)
         self.assertIn("full video of the series “Coral”", core.kickoff_prompt(req))
 
+    def test_body_model_is_available_and_free_to_use(self):
+        model = core.ROOT / "assets" / "modelos" / "cuerpo-torso.js"
+        self.assertIn("window.CUERPO_TORSO", model.read_text())
+        self.assertLess(model.stat().st_size, 2_000_000)  # se incrusta en cada stage.html
+        self.assertIn("CC0", (model.parent / "LICENCIA.txt").read_text())
+        req = core.VideoRequest(tema="El hipo")
+        req.validate()
+        self.assertIn("assets/modelos/cuerpo-torso.js", core.render_prompt(req.variables()))
+
     def test_voice_engine_in_the_prompt(self):
         original = core.chatterbox_ready
         core.chatterbox_ready = lambda: True

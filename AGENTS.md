@@ -42,6 +42,7 @@ Usa siempre `.venv/bin/python`, porque el `python3` del sistema no tiene Kokoro,
 | `paper_stage/web.py` | Servidor Starlette y API; `SameOriginGuard` siempre, y `TokenAuth` si hay `PAPER_STAGE_TOKEN`. |
 | `paper_stage/demo.py` | Agente simulado que escribe un video falso completo (para `--demo` y las pruebas). |
 | `scripts/voz.py` | Voz con Chatterbox; corre con `.venv-voz/bin/python`, porque exige otras versiones. Sus ajustes y `assets/voz/referencia-es.wav` son la voz elegida de oído: no los cambies sin que el usuario la escuche. |
+| `assets/modelos/`, `scripts/hornear_cuerpo.py` | Cuerpo humano listo para Three.js (CC0, de Quaternius), para que el agente no arme figuras con cápsulas. |
 | `run_agent.py` | CLI. |
 | `tests/test_app.py` | Pruebas de extremo a extremo con el agente demo y directorios temporales. |
 
