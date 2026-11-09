@@ -300,18 +300,19 @@ function stepsHtml(steps, running) {
 function jobRow(job) {
   const pct = job.steps_total ? Math.round((job.steps_done / job.steps_total) * 100) : 0;
   const req = job.request || {};
+  const fixes = (req.correcciones || []).length;  // sus 12 pasos ya estaban hechos: no dicen nada del avance
   const extra = job.status === "queued" && job.queue_position ? `· puesto ${job.queue_position} en la cola` : "";
   return `
     <a class="job" href="#/trabajo/${esc(job.id)}">
       <span class="title">${esc(req.tema)}</span>
-      <span class="pills">${(req.correcciones || []).length ? `<span class="pill plain" title="Corrige este mismo video; no crea otro">Corrección</span>` : ""}${tiktokPill(job.tiktok)}${pill(job.status)}</span>
-      ${ACTIVE.has(job.status) || job.steps_done ? `<div class="bar" aria-hidden="true"><i style="width:${pct}%"></i></div>` : ""}
+      <span class="pills">${fixes ? `<span class="pill plain" title="Corrige este mismo video; no crea otro">Corrección</span>` : ""}${tiktokPill(job.tiktok)}${pill(job.status)}</span>
+      ${!fixes && (ACTIVE.has(job.status) || job.steps_done) ? `<div class="bar" aria-hidden="true"><i style="width:${pct}%"></i></div>` : ""}
       <span class="meta">
         <span class="pill lang">${esc((req.idioma || "").toUpperCase())}</span>
         <span>${esc(reqSerie(req).nombre)}</span>
         <span>${esc(req.formato === "horizontal" ? "16:9" : "9:16")}</span>
-        <span>${job.steps_done}/${job.steps_total} pasos ${extra}</span>
-        ${job.cost_usd ? `<span>${fmtCost(job.cost_usd)}</span>` : ""}
+        <span>${fixes ? `${fixes === 1 ? "1 corrección" : `${fixes} correcciones`}` : `${job.steps_done}/${job.steps_total} pasos`} ${extra}</span>
+        ${job.cost_usd ? `<span title="Lo que costaría a precio de API; con suscripción consume de tu plan, sin cobro aparte">${fmtCost(job.cost_usd)} equivalentes</span>` : ""}
         <span>${fmtDate(job.created_at)}</span>
       </span>
     </a>`;
@@ -557,7 +558,13 @@ async function renderStudio(params) {
   async function loadJobs() {
     const jobs = (await api("/api/jobs")).filter(j => inAccount(reqSerie(j.request).id));
     const active = jobs.filter(j => ACTIVE.has(j.status)).reverse();
-    const recent = jobs.filter(j => !ACTIVE.has(j.status)).slice(0, 5);
+    // Un video aparece una sola vez: con su trabajo en curso o, si no hay, con el último.
+    const shown = new Set(active.map(j => j.slug));
+    const recent = jobs.filter(j => {
+      if (ACTIVE.has(j.status) || shown.has(j.slug)) return false;
+      shown.add(j.slug);
+      return true;
+    }).slice(0, 5);
     $("#active-jobs").innerHTML = active.length ? active.map(jobRow).join("")
       : `<div class="empty"><span class="big">Nada en producción</span>Los videos en producción aparecerán aquí.</div>`;
     $("#recent-jobs").innerHTML = recent.length ? recent.map(jobRow).join("") : `<p class="small muted">Todavía no hay trabajos terminados.</p>`;
