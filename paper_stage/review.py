@@ -181,7 +181,7 @@ Busca:
 - Calidad: ¿parece hecho por profesionales o una presentación?
 - Primer fotograma: ¿el gancho se lee y da ganas de seguir?
 
-Reglas: solo problemas reales que veas, no gustos. Como mucho {maximo}, de más a menos importante. «correccion» es una instrucción directa y concreta para quien lo va a arreglar en stage.html.
+Reglas: solo problemas reales que veas, no gustos. Solo ves un fotograma cada {cada} segundos: no afirmes que falta un texto o una imagen porque no salga en ellos, puede estar entre dos. La palabra de color en los subtítulos es la que se está pronunciando, no un énfasis mal puesto. Las figuras pequeñas con media pantalla vacía sí son un problema. Como mucho {maximo}, de más a menos importante. «correccion» es una instrucción directa y concreta para quien lo va a arreglar en stage.html.
 
 Responde solo con JSON, sin texto alrededor:
 {{"resumen": "2 frases: qué tal está y qué es lo más urgente",
