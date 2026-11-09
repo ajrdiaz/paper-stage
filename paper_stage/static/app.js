@@ -297,10 +297,11 @@ function stepsHtml(steps, running) {
   }).join("")}</div>`;
 }
 
-function jobRow(job) {
+function jobRow(job, inHistory = false) {
   const pct = job.steps_total ? Math.round((job.steps_done / job.steps_total) * 100) : 0;
   const req = job.request || {};
-  const fixes = (req.correcciones || []).length;  // sus 12 pasos ya estaban hechos: no dicen nada del avance
+  // En curso, sus 12 pasos ya estaban hechos y no dicen nada del avance. Terminada, es el mismo video de siempre.
+  const fixes = ACTIVE.has(job.status) || inHistory ? (req.correcciones || []).length : 0;
   const extra = job.status === "queued" && job.queue_position ? `· puesto ${job.queue_position} en la cola` : "";
   return `
     <a class="job" href="#/trabajo/${esc(job.id)}">
@@ -893,7 +894,7 @@ async function renderVideo(slug) {
       ${v.texts["qa_previo.md"] ? `<details class="advanced"><summary>QA previo del agente (antes del render)</summary>${markdown(v.texts["qa_previo.md"])}</details>` : ""}`,
     files: () => `<table class="files"><tbody>${v.files.map(f => `
       <tr><td><a href="/files/${esc(v.slug)}/${f.name.split("/").map(encodeURIComponent).join("/")}" target="_blank" rel="noopener">${esc(f.name)}</a></td><td>${fmtSize(f.size)}</td></tr>`).join("")}</tbody></table>`,
-    history: () => `<div class="job-list">${v.jobs.map(j => jobRow({ ...j, steps_done: v.steps_done, steps_total: v.steps_total })).join("")}</div>`,
+    history: () => `<div class="job-list">${v.jobs.map(j => jobRow({ ...j, steps_done: v.steps_done, steps_total: v.steps_total }, true)).join("")}</div>`,
   };
   const showTab = key => {
     $$(".tabbar button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === key));
