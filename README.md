@@ -6,7 +6,7 @@ El agente investiga, escribe el guion y la biblia visual, graba la voz, anima, c
 
 | Pieza | Herramienta |
 |---|---|
-| Voz | Kokoro-82M (fallback: Piper) |
+| Voz | Chatterbox (MIT; añade una marca de agua inaudible), en un entorno aparte; fallback: Kokoro-82M |
 | Subtítulos | faster-whisper `small` |
 | Animación | `stage.html` determinista (SVG + Canvas o WebGL, `window.renderAt(t)`), con GSAP y Three.js en local |
 | Música y efectos | `OfflineAudioContext` (fallback: numpy) |

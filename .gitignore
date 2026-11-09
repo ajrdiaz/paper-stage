@@ -1,4 +1,5 @@
 .venv/
+.venv-voz/
 __pycache__/
 models/
 assets/fonts/*.ttf

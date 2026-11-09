@@ -29,6 +29,7 @@ from paper_stage import publishing, radar, review  # noqa: E402
 
 # Las pruebas nunca deben escribir en el Google Drive real de quien las ejecuta.
 publishing.drive_roots = lambda: []
+core.chatterbox_ready = lambda: False  # el prompt no debe depender de lo instalado en cada equipo
 from paper_stage.web import create_app  # noqa: E402
 
 
@@ -119,6 +120,22 @@ class CoreTests(unittest.TestCase):
                      "`#2B4C7E`", "#coral", '"serie": "coral"', "`output/old-coral-video-en/`", "criaturas translúcidas"):
             self.assertIn(text, prompt)
         self.assertIn("full video of the series “Coral”", core.kickoff_prompt(req))
+
+    def test_voice_engine_in_the_prompt(self):
+        original = core.chatterbox_ready
+        core.chatterbox_ready = lambda: True
+        try:
+            req = core.VideoRequest(tema="El hipo", idioma="es")
+            req.validate()
+            prompt = core.render_prompt(req.variables())
+            self.assertIn("scripts/voz.py output/el-hipo-es/audio/lista_voz.json --idioma es", prompt)
+            self.assertIn("Solo si el script falla de verdad, usa Kokoro `ef_dora`", prompt)
+            self.assertNotIn("{{", prompt)
+            english = core.VideoRequest(tema="Hiccups", idioma="en")  # sin voz de referencia en inglés todavía
+            english.validate()
+            self.assertNotIn("scripts/voz.py", core.render_prompt(english.variables()))
+        finally:
+            core.chatterbox_ready = original
 
     def test_duration_changes_the_prompt(self):
         for duracion, scenes, text, absent in (("corta", "5", "30.0 a 45.0 segundos", "61.0"), ("larga", "7", "61.0 a 70.0 segundos", "30.0 a")):

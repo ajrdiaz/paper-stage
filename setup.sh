@@ -70,6 +70,16 @@ out="assets/vendor/three.min.js"
 [ -f "$out" ] || curl -fsSL "https://cdn.jsdelivr.net/npm/three@0.159.0/build/three.min.js" -o "$out" \
   || { rm -f "$out"; echo "Aviso: no se pudo descargar Three.js (las series en 3D no podrán renderizarse)." >&2; }
 
+echo "==> Voz principal: Chatterbox, en un entorno aparte (unos 1,3 GB, más 3 GB de modelo en el primer uso)"
+# Exige versiones de PyTorch y Transformers distintas a las del entorno principal. SKIP_VOZ=1 usa solo Kokoro.
+if [ "${SKIP_VOZ:-0}" != "1" ]; then
+  "$PYTHON" -m venv .venv-voz
+  .venv-voz/bin/pip install -q --upgrade pip
+  # setuptools<81: la marca de agua de Chatterbox (perth) todavía usa pkg_resources.
+  .venv-voz/bin/pip install -q "chatterbox-tts==0.1.7" "setuptools<81" \
+    || { rm -rf .venv-voz; echo "Aviso: no se pudo instalar Chatterbox; se usará Kokoro." >&2; }
+fi
+
 echo "==> Precarga de modelos locales (Kokoro, faster-whisper small)"
 .venv/bin/python - <<'PY' || echo "Aviso: no se pudieron precargar los modelos (¿acceso a huggingface.co?). Se descargarán en el primer uso." >&2
 from kokoro import KPipeline

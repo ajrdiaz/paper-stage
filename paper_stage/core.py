@@ -48,6 +48,15 @@ VOICES = {
 DEFAULT_VOICES = {"femenina": {"es": "ef_dora", "en": "af_heart"},
                   "masculina": {"es": "em_alex", "en": "am_michael"}}
 FORMATS = ["vertical", "horizontal"]
+VOICE_PYTHON = ROOT / ".venv-voz" / "bin" / "python"  # Chatterbox va en un entorno aparte: exige otras versiones
+
+
+def chatterbox_ready() -> bool:
+    return VOICE_PYTHON.exists()
+
+
+VOZ_CHATTERBOX = """**Voz de la serie: Chatterbox**, con el script de la app, que ya trae la voz y los ajustes de la serie. Escribe `output/{{SLUG}}/audio/lista_voz.json`: `[{"texto": "…", "salida": "output/{{SLUG}}/audio/raw_01.wav"}, …]`, una entrada por escena con todo su texto (320 caracteres como máximo), y ejecútalo una vez, en primer plano y desde la raíz: `.venv-voz/bin/python scripts/voz.py output/{{SLUG}}/audio/lista_voz.json --idioma {{IDIOMA}}`. Tarda unas 12 veces la duración del audio. No uses el `tts.py` de videos anteriores ni otra voz. No hay ajuste de velocidad: si el total queda fuera de la duración, reescribe líneas (con `atempo` puedes ajustar como mucho a 1.08). Solo si el script falla de verdad, usa Kokoro `{{VOZ}}` (lang_code `{{LANG_CODE}}`) y anótalo en `qa.md`."""
+VOZ_KOKORO = """**Voz de la serie:** Kokoro `{{VOZ}}` (lang_code `{{LANG_CODE}}`). Si tienes que usar Piper y su voz no coincide (femenina o masculina), elige otra voz de Piper del mismo idioma que sí coincida."""
 _REMATE = ("Una frase memorable que vuelve a la imagen del inicio, para que el loop se sienta continuo, y una invitación a enviarlo a "
            'una persona concreta que lo vive ("mándaselo a quien…"). Cierra con el CTA exacto, sin cambiarle una palabra: "{{CTA}}"')
 _GANCHO = ("Una frase de 3 s de voz como máximo, de uno de los tipos de abajo. La voz empieza en ≤0.3 s, hay movimiento desde el frame 1 y el "
@@ -316,6 +325,7 @@ class VideoRequest:
         length = DURATIONS[self.duracion]
         return {
             "ESTRUCTURA": length["estructura"],  # primero: trae dentro otras variables
+            "VOZ_MOTOR": VOZ_CHATTERBOX if chatterbox_ready() and self.idioma == "es" else VOZ_KOKORO,
             "DURACION": self.duracion,
             "DUR_MIN": str(length["min"]),
             "DUR_MAX": str(length["max"]),
@@ -468,6 +478,8 @@ def check_env() -> dict:
     for name, (why, optional) in BINARIES.items():
         items.append({"kind": "bin", "name": name, "why": why, "optional": optional,
                       "ok": shutil.which(name) is not None})
+    items.append({"kind": "bin", "name": "chatterbox", "why": "voz principal en español (./setup.sh; sin ella, Kokoro)",
+                  "optional": True, "ok": chatterbox_ready()})
     items.append({"kind": "bin", "name": "chromium", "why": "render de stage.html (playwright install chromium)",
                   "optional": False, "ok": _chromium_installed()})
     for name, (why, optional) in MODULES.items():
