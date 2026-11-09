@@ -12,7 +12,7 @@ Trabajas en `output/{{SLUG}}/`. **No uses ninguna API de pago.** Voz, música, e
 
 | Parámetro | `es` (por defecto) | `en` |
 |---|---|---|
-| Variante | Español latinoamericano neutro (tú; sin modismos de un solo país) | Inglés americano |
+| Variante | Español latinoamericano claro (tú). Si el tono de la serie indica un público, usa ejemplos que ese público reconozca al instante | Inglés americano |
 | Voz Piper (fallback) | `es_MX-claude-high` | `en_US-amy-medium` |
 | Velocidad TTS | 0.98–1.06 (ágil y sin pausas añadidas) | 1.00–1.08 |
 | Palabras de narración | {{PALABRAS_ES}} | {{PALABRAS_EN}} |

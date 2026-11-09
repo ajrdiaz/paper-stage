@@ -236,8 +236,9 @@ DEFAULT_SERIE = Serie(
         "Texto grande y muy legible en HTML encima del 3D."
     ),
     tono=(
-        "Directo y cercano, como un amigo que sabe mucho. Frases cortas, humor ligero y analogías con "
-        "objetos de casa. Sorprende sin alarmar y nunca da consejos médicos."
+        "Directo y cercano, como un amigo que sabe mucho. Frases cortas, humor ligero y analogías con objetos de casa. Público principal: México: "
+        "usa ejemplos que allí se reconocen al instante (tacos, tortillas, el tianguis, el camión, tu mamá), sin caricaturas ni modismos forzados. "
+        "Sorprende sin alarmar y nunca da consejos médicos."
     ),
     paleta=["#0B1026", "#1B2A5B", "#2FD6C3", "#FF8A3D", "#F5F7FF"],
     voz_estilo="narradora adulta, cercana y segura, con ritmo ágil",
