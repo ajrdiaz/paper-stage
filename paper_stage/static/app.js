@@ -304,7 +304,7 @@ function jobRow(job) {
   return `
     <a class="job" href="#/trabajo/${esc(job.id)}">
       <span class="title">${esc(req.tema)}</span>
-      <span class="pills">${tiktokPill(job.tiktok)}${pill(job.status)}</span>
+      <span class="pills">${(req.correcciones || []).length ? `<span class="pill plain" title="Corrige este mismo video; no crea otro">Corrección</span>` : ""}${tiktokPill(job.tiktok)}${pill(job.status)}</span>
       ${ACTIVE.has(job.status) || job.steps_done ? `<div class="bar" aria-hidden="true"><i style="width:${pct}%"></i></div>` : ""}
       <span class="meta">
         <span class="pill lang">${esc((req.idioma || "").toUpperCase())}</span>
