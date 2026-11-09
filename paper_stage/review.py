@@ -23,6 +23,7 @@ from .radar import RadarError, _extract_json, ask_claude
 FILE = "revision.json"
 FRAMES_DIR = "revision"
 FRAME_EVERY = 3  # segundos entre fotogramas: bastante para ver cada escena sin gastar de más
+CLOSING_SECONDS = 6  # el final se mira segundo a segundo
 MAX_SUGGESTIONS = 12
 COVER_MIN_S, COVER_MAX_S = 0.5, 2.5  # debe coincidir con frame_portada_s en §11 del prompt: el gancho, ya completo
 COVER_THUMB_WIDTH = 270  # lo que mide una portada en la cuadrícula de un perfil, aproximadamente
@@ -126,6 +127,17 @@ def extract_frames(video: Path, out_dir: Path) -> list[dict]:
     return frames
 
 
+def extract_closing_frames(video: Path, out_dir: Path, duration: float) -> list[Path]:
+    """Un fotograma por segundo del final: el llamado a la acción puede durar menos que FRAME_EVERY,
+    y sin verlo la revisión avisa de que falta."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for old in out_dir.glob("c*.jpg"):
+        old.unlink()
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", str(max(0.0, duration - CLOSING_SECONDS)), "-i", str(video),
+                    "-vf", "fps=1,scale=540:-2", "-q:v", "4", str(out_dir / "c%02d.jpg")], capture_output=True, timeout=120)
+    return sorted(out_dir.glob("c*.jpg"))
+
+
 def measured_suggestions(data: dict) -> list[dict]:
     """Lo que se sabe sin opinar: viene de las medidas, no de Claude."""
     found: list[dict] = []
@@ -162,7 +174,7 @@ def measured_suggestions(data: dict) -> list[dict]:
 
 REVIEW_PROMPT = """Eres el editor jefe de una cuenta de TikTok de videos explicativos para adultos. Revisa este video antes de publicarlo: sé exigente y concreto, como si tu cuenta dependiera de él.
 
-Tienes un fotograma cada {cada} segundos, en orden (el primero es el segundo 0),. No puedes oír el video: de eso se ocupan otras medidas.
+Tienes un fotograma cada {cada} segundos, en orden (el primero es el segundo 0), y después uno por segundo de los últimos {cierre} segundos, para el cierre. No puedes oír el video: de eso se ocupan otras medidas.
 
 Serie: {serie}. Estilo que debe tener: {estilo}
 
@@ -221,10 +233,11 @@ async def visual_review(out_dir: Path, frames: list[dict], measures: dict, reque
         when = scenes[i] if i < len(scenes) and isinstance(scenes[i], dict) else {}
         lines.append(f"{when.get('start', '?')}–{when.get('end', '?')} s: {scene.get('vo', '')} [Visual: {scene.get('visual', '')}]")
     ficha = request_serie or {}
-    prompt = REVIEW_PROMPT.format(cada=FRAME_EVERY, serie=ficha.get("nombre") or library.script_serie(script),
+    prompt = REVIEW_PROMPT.format(cada=FRAME_EVERY, cierre=CLOSING_SECONDS, serie=ficha.get("nombre") or library.script_serie(script),
                                   estilo=ficha.get("estilo") or "(sin definir)",
                                   guion="\n".join(lines) or "(sin guion)", medidas=json.dumps(measures, ensure_ascii=False), maximo=MAX_SUGGESTIONS)
-    content = _image_blocks([out_dir / f["archivo"] for f in frames])
+    closing = await asyncio.to_thread(extract_closing_frames, out_dir / "final.mp4", out_dir / FRAMES_DIR, float(measures.get("duracion") or 0))
+    content = _image_blocks([*[out_dir / f["archivo"] for f in frames], *closing])
     text, _ = await ask_claude([*content, {"type": "text", "text": prompt}])
     data = _extract_json(text, "{")
     if not isinstance(data, dict):

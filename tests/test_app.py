@@ -802,6 +802,15 @@ class ReviewTests(unittest.TestCase):
                "lavfi.scene_score=0.4\nlavfi.scene_score=0.5\n")
         self.assertEqual(review.parse_video_filters(log), {"congelados": [(12.5, 3.2)], "negros": [(1.5, 0.5)], "cortes": 2})
 
+    @unittest.skipUnless(shutil.which("ffmpeg"), "hace falta ffmpeg")
+    def test_closing_is_seen_second_by_second(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out, video = Path(tmp), Path(tmp) / "v.mp4"
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=s=128x128:r=24:d=10",
+                            "-pix_fmt", "yuv420p", str(video)], check=True)
+            self.assertEqual(len(review.extract_closing_frames(video, out / "r", 10.0)), review.CLOSING_SECONDS)
+            self.assertEqual(len(review.extract_closing_frames(video, out / "r", 13.0)), 3)  # menos fotogramas: sin restos de antes
+
     def test_cover_verdict(self):
         good = {"texto": "¿Tu panza ruge en pleno SILENCIO?", "texto_se_lee": True, "sujeto_nitido": True, "subtitulos_encima": False}
         gancho = "¿Tu panza ruge en pleno SILENCIO?"
