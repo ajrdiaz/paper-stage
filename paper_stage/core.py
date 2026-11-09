@@ -358,7 +358,8 @@ class VideoRequest:
         if self.referencias:
             dirs = ", ".join(f"`output/{slug}/`" for slug in self.referencias)
             return (f"Ya hay videos de «{ficha.nombre}»: {dirs}. Antes de dibujar, abre su `stage.html` (y `tools/`, si "
-                    "existe) y reutiliza su estilo y sus piezas: la serie depende de que se vea siempre igual.")
+                    "existe) y reutiliza su paleta, materiales, cámara, subtítulos y música: la serie depende de que se reconozca. **No copies sus figuras humanas ni "
+                    "sus manos si están armadas con cápsulas o esferas:** ahí manda el §7, que obliga a usar `assets/modelos/cuerpo-torso.js`.")
         return (f"Este es el primer video de «{ficha.nombre}»: todavía no tiene diseño. Créalo a partir de la ficha del "
                 "§3, en piezas reutilizables, porque los siguientes videos lo copiarán.")
 

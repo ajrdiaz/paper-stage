@@ -120,6 +120,7 @@ class CoreTests(unittest.TestCase):
                      "`#2B4C7E`", "#coral", '"serie": "coral"', "`output/old-coral-video-en/`", "criaturas translúcidas"):
             self.assertIn(text, prompt)
         self.assertIn("full video of the series “Coral”", core.kickoff_prompt(req))
+        self.assertIn("No copies sus figuras humanas", prompt)  # los videos antiguos no deben devolver el muñeco
 
     def test_body_model_is_available_and_free_to_use(self):
         model = core.ROOT / "assets" / "modelos" / "cuerpo-torso.js"
