@@ -988,20 +988,26 @@ class RadarUnitTests(unittest.TestCase):
     def test_niches_only_keep_links_from_the_search(self):
         items = [
             {"nicho": "Con prueba", "puntaje": 9, "cuentas": ["@Real.Cuenta", "no vale!"],
-             "senales": [{"detalle": "a", "url": "https://real.example/x/"}]},
+             "senales": [{"detalle": "a", "url": "https://www.tiktok.com/@real.cuenta/video/1/"}]},
+            {"nicho": "Solo un artículo", "puntaje": 9, "senales": [{"detalle": "d", "url": "https://real.example/x"}]},
+            {"nicho": "Publicidad de TikTok", "puntaje": 9, "senales": [{"detalle": "e", "url": "https://ads.tiktok.com/informe.pdf"}]},
             {"nicho": "Enlace inventado", "puntaje": 9, "senales": [{"detalle": "b", "url": "https://inventado.example"}]},
             {"nicho": "Enlace peligroso", "puntaje": 7, "senales": [{"detalle": "c", "url": "javascript:alert(1)"}]},
             {"nicho": "", "puntaje": 10}, "no es un objeto",
             {"nicho": "Puntaje raro", "puntaje": "mucho"},
         ]
-        niches = {n["nicho"]: n for n in radar.clean_niches(items, {"https://real.example/x"})}
+        found = {"https://www.tiktok.com/@real.cuenta/video/1", "https://real.example/x", "https://ads.tiktok.com/informe.pdf"}
+        niches = {n["nicho"]: n for n in radar.clean_niches(items, found)}
         self.assertEqual(niches["Con prueba"]["puntaje"], 9)
+        # Un artículo conserva su enlace, pero no demuestra demanda.
+        self.assertEqual((niches["Solo un artículo"]["puntaje"], niches["Solo un artículo"]["senales"][0]["url"]), (6, "https://real.example/x"))
+        self.assertEqual(niches["Publicidad de TikTok"]["puntaje"], 6)
         self.assertEqual(niches["Con prueba"]["cuentas"], ["real.cuenta"])
         self.assertEqual(niches["Enlace inventado"]["puntaje"], 6)
         self.assertEqual(niches["Enlace inventado"]["senales"][0]["url"], "")
         self.assertEqual(niches["Enlace peligroso"]["senales"][0]["url"], "")
         self.assertEqual(niches["Puntaje raro"]["puntaje"], 1)
-        self.assertEqual(len(niches), 4)
+        self.assertEqual(len(niches), 6)
 
     def test_apify_source(self):
         calls = []
@@ -1213,9 +1219,16 @@ class RadarApiTests(unittest.TestCase):
         db = sqlite3.connect(":memory:")
         db.execute("CREATE TABLE radar_niche_runs (id TEXT PRIMARY KEY, tema TEXT NOT NULL, status TEXT NOT NULL, "
                    "error TEXT, nichos TEXT, created_at REAL NOT NULL)")
-        db.execute("INSERT INTO radar_niche_runs VALUES ('viejo', '', 'done', NULL, '[]', 1)")
+        def niche(name, score, url):
+            return {"nicho": name, "puntaje": score, "temas_ejemplo": [], "cuentas": [], "senales": [{"detalle": "x", "url": url}]}
+
+        saved = [niche("Artículo", 8, "https://blog.example/x"), niche("Video", 7, "https://www.tiktok.com/@a.b/video/1")]
+        db.execute("INSERT INTO radar_niche_runs VALUES ('viejo', '', 'done', NULL, ?, 1)", [json.dumps(saved)])
         box = radar.Radar(db, TMP / "data-radar-old")
-        self.assertEqual(box.overview()["niche_runs"][0]["mercado"], "es")
+        run = box.overview()["niche_runs"][0]
+        self.assertEqual(run["mercado"], "es")
+        # Las búsquedas guardadas también siguen el tope, y el orden cambia con él.
+        self.assertEqual([(n["nicho"], n["puntaje"]) for n in run["nichos"]], [("Video", 7), ("Artículo", 6)])
 
     def test_ideas_come_from_the_chosen_niche(self):
         with self.client("data-radar-ideas", used_topics=lambda idioma: ["¿Por qué bostezas cuando otro bosteza?"]) as client:

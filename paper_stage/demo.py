@@ -373,7 +373,7 @@ async def analyze_demo(video: dict, transcript: str, images: list[bytes]) -> dic
 
 async def find_niches_demo(tema: str, context: list[dict], mercado: str = "mx") -> tuple[list[dict], set[str]]:
     await asyncio.sleep(min(SPEED, 0.6))
-    proof = "https://example.com/tendencia"
+    proof = "https://www.tiktok.com/@motor.curioso/video/7700000000000000001"
     items = [
         {"nicho": "Lo que nadie te explicó de tu coche", "puntaje": 9, "cuentas": ["importacrew", "motor.curioso"],
          "por_que": "Modo demostración: todo el mundo conduce y los mitos se comparten mucho.",
@@ -381,7 +381,7 @@ async def find_niches_demo(tema: str, context: list[dict], mercado: str = "mx") 
          "temas_ejemplo": ["Por qué el motor frío gasta más", "El mito del punto muerto", "Qué mide de verdad el cuentakilómetros"],
          "senales": [{"tipo": "tendencia", "detalle": "Ejemplo de prueba con enlace.", "url": proof}]},
         {"nicho": "La ciencia de lo que comes cada día", "puntaje": 9, "cuentas": [],
-         "por_que": "Modo demostración: sin ninguna prueba con enlace, su puntaje baja a 6.",
+         "por_que": "Modo demostración: sin un video o una cuenta de TikTok como prueba, su puntaje baja a 6.",
          "angulo_propio": "Experimentos de cocina que se pueden repetir.", "riesgos": "Evitar consejos de salud.",
          "temas_ejemplo": ["Por qué el pan se pone duro", "Qué hace la sal al hervir", "El secreto de la fritura"],
          "senales": [{"tipo": "demanda", "detalle": "Ejemplo de prueba sin enlace.", "url": ""}]},

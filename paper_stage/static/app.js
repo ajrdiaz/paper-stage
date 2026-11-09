@@ -1620,7 +1620,7 @@ async function renderRadar(params) {
         <button class="btn primary" ${running ? "disabled" : ""}>${running ? "Buscando…" : "Buscar nichos"}</button>
       </form>
       <p class="small muted">${market.propio ? "Claude busca en la web y usa los virales del Radar como pista."
-        : `Claude investiga este mercado y te lo cuenta en español. No usa tus cuentas del Radar, porque no son de aquí. Si eliges un nicho, las ideas llevan lo que funciona a tu canal, sin traducir videos de allá.`} El mercado orienta la búsqueda, pero no garantiza que todo sea de ahí. Cada prueba lleva su enlace; sin ninguno, el puntaje no pasa de 6. Para ver cuentas reales de un nicho, usa «Buscar cuentas en TikTok»; al añadir una, se lee y ves sus cifras.</p>
+        : `Claude investiga este mercado y te lo cuenta en español. No usa tus cuentas del Radar, porque no son de aquí. Si eliges un nicho, las ideas llevan lo que funciona a tu canal, sin traducir videos de allá.`} El mercado orienta la búsqueda, pero no garantiza que todo sea de ahí. Un artículo no demuestra demanda: sin un video o una cuenta de TikTok como prueba, el puntaje no pasa de 6. Para ver cuentas reales de un nicho, usa «Buscar cuentas en TikTok»; al añadir una, se lee y ves sus cifras.</p>
       ${runs.length ? runs.map((r, i) => {
         const title = `${r.tema ? esc(r.tema) : "Todos los temas"} · ${fmtDate(r.created_at)}`;
         const body = r.status === "running" ? `<p class="small muted loading"><span class="spinner" aria-hidden="true"></span>Investigando; puede tardar unos minutos…</p>`

@@ -40,7 +40,7 @@ MAX_NICHES = 10
 IDEAS_PER_RUN = 5
 IDEA_LANGUAGE = "es"
 MAX_IDEA_TOPIC = 70
-NICHE_CAP_WITHOUT_PROOF = 6  # sin una prueba con enlace, un nicho no pasa de este puntaje
+NICHE_CAP_WITHOUT_PROOF = 6  # sin un video o una cuenta de TikTok como prueba, un nicho no pasa de este puntaje
 MAX_NICHE_RUNS = 40  # búsquedas que se muestran, de todos los mercados
 # Dónde se investiga un nicho. «propio»: el público de los videos y de las cuentas que ya vigila.
 MARKETS = {
@@ -65,6 +65,8 @@ MAX_VIDEO_BYTES = 300 * 1024 * 1024
 HANDLE_RE = re.compile(r"^[a-z0-9._]{2,24}$")
 VIDEO_ID_RE = re.compile(r"^\d{5,30}$")
 URL_RE = re.compile(r"https?://[^\s\"'<>)\]\\]+")
+# Un video o un perfil; ads.tiktok.com y similares son artículos, no demanda medida.
+TIKTOK_PROOF_RE = re.compile(r"https?://(?:(?:www\.|m\.)?tiktok\.com/@[^/?#\s]+|(?:vm|vt)\.tiktok\.com/\w)", re.I)
 IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG", b"RIFF")
 
 # (handles, progreso) → handle → {"followers", "total_videos", "videos": [...]} o {"error": "..."}
@@ -550,7 +552,7 @@ Reglas:
 - «cuentas»: usuarios de TikTok reales que viste en la búsqueda. Si no viste ninguno, deja la lista vacía; no inventes.
 - Cada prueba de «senales» lleva la URL exacta donde la viste, también si es un video de los <datos>. Sin fuente, deja «url» vacía. No inventes cifras.
 - «busquedas»: 2 frases cortas, como las que alguien escribiría en el buscador de TikTok, para encontrar videos de este nicho, en {idioma}.
-- «puntaje» de 1 a 10: demanda, facilidad de producir y hueco para un ángulo propio.
+- «puntaje» de 1 a 10: demanda, facilidad de producir y hueco para un ángulo propio. Una guía o un artículo no demuestran demanda: busca videos o cuentas de TikTok concretos como prueba. Sin ninguno, el puntaje no pasa de {tope}.
 
 Responde solo con JSON, sin texto alrededor, y en español salvo «busquedas» y los nombres propios:
 [{{"nicho": "...", "por_que": "por qué ahora, en 2 frases", "angulo_propio": "cómo diferenciarse de las cuentas que ya existen",
@@ -569,6 +571,7 @@ async def find_niches(tema: str, context: list[dict], mercado: str = DEFAULT_MAR
         n=MAX_NICHES, hoy=time.strftime("%Y-%m-%d"), contexto="\n".join(lines) or "(sin datos de este mercado)",
         tema=f"\n\nEl usuario quiere nichos dentro de este tema: {tema}" if tema else "",
         publico=market["publico"], idioma=market["idioma"], replicar="" if market["propio"] else REPLICATE_RULE,
+        tope=NICHE_CAP_WITHOUT_PROOF,
     )
     # Solo buscar y leer: la web es texto de terceros.
     text, found = await ask_claude(prompt, tools=["WebSearch", "WebFetch"], max_turns=14)
@@ -646,8 +649,14 @@ def _norm_url(url: str) -> str:
     return url.strip().split("#")[0].rstrip("/.,").lower()
 
 
+def _capped_score(score: int, signals: list[dict]) -> int:
+    """Un blog no pesa como un video con vistas medidas: así los mercados se pueden comparar."""
+    proven = any(TIKTOK_PROOF_RE.match(s.get("url") or "") for s in signals)
+    return score if proven else min(score, NICHE_CAP_WITHOUT_PROOF)
+
+
 def clean_niches(items: list[dict], found: set[str]) -> list[dict]:
-    """Solo conserva los enlaces que salieron de la búsqueda; sin ninguno, el puntaje no pasa del tope."""
+    """Solo conserva los enlaces que salieron de la búsqueda; sin uno de TikTok, el puntaje no pasa del tope."""
     seen = {_norm_url(u) for u in found}
     niches = []
     for item in items[:MAX_NICHES * 2]:
@@ -669,8 +678,7 @@ def clean_niches(items: list[dict], found: set[str]) -> list[dict]:
             score = max(1, min(10, round(float(item.get("puntaje") or 1))))
         except (TypeError, ValueError):
             score = 1
-        if not any(s["url"] for s in signals):
-            score = min(score, NICHE_CAP_WITHOUT_PROOF)
+        score = _capped_score(score, signals)
         niches.append({
             "nicho": str(item["nicho"]).strip()[:120], "por_que": str(item.get("por_que") or "").strip()[:600],
             "angulo_propio": str(item.get("angulo_propio") or "").strip()[:400],
@@ -724,6 +732,7 @@ class Radar:
         self.db.executescript(SCHEMA)
         if "mercado" not in {row[1] for row in self.db.execute("PRAGMA table_info(radar_niche_runs)")}:  # bases anteriores
             self.db.execute(f"ALTER TABLE radar_niche_runs ADD COLUMN mercado TEXT NOT NULL DEFAULT '{OLD_MARKET}'")
+        self._cap_saved_niches()
         self.covers_dir = data_dir / "radar" / "covers"
         self.profile_dir = data_dir / "radar" / "navegador"  # sesión de TikTok: fuera de git, en data/
         self.covers_dir.mkdir(parents=True, exist_ok=True)
@@ -749,6 +758,14 @@ class Radar:
                                 [(h, now) for h in DEFAULT_ACCOUNTS])
             self.db.execute("INSERT INTO settings (key, value) VALUES ('radar_seeded', '1')")
         self.db.commit()
+
+    def _cap_saved_niches(self) -> None:
+        """Las búsquedas guardadas también siguen el tope: si no, sus puntajes no se comparan con los nuevos."""
+        for run_id, saved in self.db.execute("SELECT id, nichos FROM radar_niche_runs WHERE nichos IS NOT NULL").fetchall():
+            niches = json.loads(saved)
+            capped = sorted(({**n, "puntaje": _capped_score(n["puntaje"], n["senales"])} for n in niches), key=lambda n: -n["puntaje"])
+            if capped != niches:
+                self.db.execute("UPDATE radar_niche_runs SET nichos = ? WHERE id = ?", [json.dumps(capped, ensure_ascii=False), run_id])
 
     # ------------------------------------------------------------------ configuración
 
