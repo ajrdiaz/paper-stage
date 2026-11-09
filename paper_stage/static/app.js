@@ -90,6 +90,17 @@ function savePrefs(prefs) {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* sin almacenamiento */ }
 }
 
+function hashParams() {
+  return new URLSearchParams(location.hash.split("?")[1] || "");
+}
+// Anota el estado en la dirección para que sobreviva a una recarga. replaceState no dispara
+// hashchange: la vista no se vuelve a pintar ni se llena el historial de «Atrás».
+function setHashParams(changes) {
+  const params = hashParams();
+  for (const [key, value] of Object.entries(changes)) params.set(key, value);
+  history.replaceState(null, "", `${location.hash.split("?")[0] || "#/"}?${params}`);
+}
+
 function onCleanup(fn) { cleanup.push(fn); }
 
 /* ------------------------------------------------------------------ series (datos) */
@@ -902,8 +913,13 @@ async function renderVideo(slug) {
     $("#tab-body").innerHTML = bodies[key]();
     if ($("#pub-box")) mountPublish($("#pub-box"), v.slug);
   };
-  $(".tabbar").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) showTab(b.dataset.tab); });
-  showTab(tabs[0][0]);
+  $(".tabbar").addEventListener("click", e => {
+    const b = e.target.closest("[data-tab]");
+    if (b) { setHashParams({ tab: b.dataset.tab }); showTab(b.dataset.tab); }
+  });
+  // Un video puede no tener la pestaña anotada (por ejemplo, aún sin revisión).
+  const askedTab = hashParams().get("tab");
+  showTab(tabs.some(([k]) => k === askedTab) ? askedTab : tabs[0][0]);
 
   const bodyEl = $("#tab-body");
   bodyEl.addEventListener("click", async e => {
@@ -1498,8 +1514,9 @@ async function renderRadar(params) {
   let tab = ["videos", "cuentas", "patrones", "nichos", "ideas"].includes(params.get("tab")) ? params.get("tab") : "videos";
   const filters = { handle: "", days: "14", viral: false, sort: "multiple" };
   let adding = "", nicheTema = "", lastDrawn = "";
-  // Se abre en el mercado de la última búsqueda.
-  let nicheMarket = data.niche_runs[0]?.mercado || data.config.default_market;
+  // El de la dirección, si hay; si no, el de la última búsqueda.
+  let nicheMarket = data.config.markets.some(m => m.id === params.get("mercado")) ? params.get("mercado")
+    : data.niche_runs[0]?.mercado || data.config.default_market;
   const marketOf = id => data.config.markets.find(m => m.id === id) || { id, nombre: id, propio: true };
 
   const tabsHtml = () => [["videos", "Videos"], ["cuentas", "Cuentas"], ["patrones", "Patrones"], ["nichos", "Nichos"], ["ideas", "Ideas"]]
@@ -1673,9 +1690,9 @@ async function renderRadar(params) {
 
   view.onclick = async ev => {
     const t = ev.target.closest("[data-tab]");
-    if (t) { tab = t.dataset.tab; draw(); return; }
+    if (t) { tab = t.dataset.tab; setHashParams({ tab }); draw(); return; }
     const marketButton = ev.target.closest("[data-market]");
-    if (marketButton) { nicheMarket = marketButton.dataset.market; draw(); return; }
+    if (marketButton) { nicheMarket = marketButton.dataset.market; setHashParams({ mercado: nicheMarket }); draw(); return; }
     if (ev.target.closest("#radar-scan")) { await act("/api/radar/scan", { method: "POST", body: {} }); return; }
     const analyze = ev.target.closest("[data-analyze]");
     if (analyze) { await act(`/api/radar/videos/${analyze.dataset.analyze}/analyze`, { method: "POST" }); return; }
