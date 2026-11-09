@@ -405,6 +405,19 @@ class Publisher:
                                 [post.get("status"), post.get("dueAt"), post.get("sentAt"), pub_id])
         self.db.commit()
 
+    def slugs_to_refresh(self) -> list[str]:
+        """Videos con un envío en curso o cuya hora ya llegó. Los programados para más adelante
+        no se consultan todavía: el cupo de la API de Buffer es limitado."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+        rows = self.db.execute("SELECT DISTINCT slug FROM publications WHERE mode != ? AND post_id IS NOT NULL "
+                               "AND (status IS NULL OR status NOT IN ('sent', 'error', 'deleted')) "
+                               "AND (status = 'sending' OR due_at IS NULL OR due_at <= ?)", [MANUAL, now])
+        return [r[0] for r in rows.fetchall()]
+
+    def refresh_pending(self, min_interval: float = 60) -> None:
+        for slug in self.slugs_to_refresh():
+            self.refresh(slug, min_interval)
+
     def mark_manual(self, slug: str) -> dict:
         """Registra que el video ya se subió a TikTok a mano, para no volver a enviarlo."""
         if not (library.slug_dir(slug) / "final.mp4").exists():

@@ -155,7 +155,13 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         await publisher.stop()
         await manager.stop()
 
+    refreshing: dict[str, asyncio.Task | None] = {"task": None}
+
     def _with_tiktok(items: list[dict]) -> list[dict]:
+        # Sin esperar a Buffer: las listas se piden cada pocos segundos, y el estado nuevo sale en la siguiente.
+        task = refreshing["task"]
+        if (not task or task.done()) and publisher.slugs_to_refresh():
+            refreshing["task"] = asyncio.create_task(asyncio.to_thread(publisher.refresh_pending))
         published = publisher.published()
         for item in items:
             item["tiktok"] = published.get(item["slug"])

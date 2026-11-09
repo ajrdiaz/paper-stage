@@ -695,6 +695,24 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({h["status"] for h in pub.history(self.slug)}, {"sent", "deleted"})
         self.assertEqual(pub.published()[self.slug], "publicado")
 
+    async def test_list_status_refreshes_only_when_due(self):
+        net = FakeNet(post_status="sent")
+        pub = self.publisher(net)
+        pub.start(self.slug, publishing.PublishRequest(text="Hola", mode="schedule", due_at="2099-01-01T00:00:00Z"))
+        await self.finish(pub, self.slug)
+        pub.db.execute("UPDATE publications SET due_at = '2099-01-01T00:00:00.000Z'")
+        self.assertEqual(pub.slugs_to_refresh(), [])  # programado para más adelante: no gasta cupo
+        pub.refresh_pending()
+        self.assertEqual(net.status_queries, 0)
+        pub.db.execute("UPDATE publications SET due_at = '2020-01-01T00:00:00.000Z'")  # ya llegó su hora
+        self.assertEqual(pub.slugs_to_refresh(), [self.slug])
+        pub.refresh_pending()
+        self.assertEqual(net.status_queries, 1)
+        self.assertEqual(pub.published()[self.slug], "publicado")
+        self.assertEqual(pub.slugs_to_refresh(), [])  # ya es definitivo
+        pub.db.execute("UPDATE publications SET status = 'sending', due_at = '2099-01-01T00:00:00.000Z'")
+        self.assertEqual(pub.slugs_to_refresh(), [self.slug])  # enviándose: se consulta aunque su fecha sea futura
+
     async def test_errors_are_readable(self):
         # Carpeta sin compartir: falla rápido (sin agotar la espera) y dice cómo arreglarlo.
         pub = self.publisher(FakeNet(public=False, login=True), sync_timeout=60, login_grace=0.05)
