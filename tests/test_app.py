@@ -740,6 +740,10 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(diffs[0]["t"], 10.0)
         self.assertEqual(review.compare_speech("¿Para qué?", self.heard("para que")), [])  # tildes y signos no cuentan
         self.assertEqual(review.compare_speech("Hola", []), [{"t": 0.0, "esperado": "hola", "oido": ""}])
+        # Falsos avisos del primer video de México: se oyen igual, solo se escriben distinto.
+        self.assertEqual(review.compare_speech("de cinco a treinta veces, a quien le ruge en cada junta",
+                                               self.heard("de 5 a 30 veces a quien le rujen cada junta")), [])
+        self.assertEqual(review.compare_speech("sobra piel", self.heard("sobre piel"))[0]["esperado"], "sobra")  # esto sí es distinto
 
     def test_measures_become_suggestions(self):
         found = review.measured_suggestions({

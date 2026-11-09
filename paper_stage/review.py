@@ -38,6 +38,21 @@ def _plain(word: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text)
 
 
+NUMBER_WORDS = {"cero": "0", "un": "1", "uno": "1", "una": "1", "dos": "2", "tres": "3", "cuatro": "4", "cinco": "5", "seis": "6", "siete": "7",
+                "ocho": "8", "nueve": "9", "diez": "10", "once": "11", "doce": "12", "quince": "15", "veinte": "20", "treinta": "30",
+                "cuarenta": "40", "cincuenta": "50", "sesenta": "60", "setenta": "70", "ochenta": "80", "noventa": "90", "cien": "100", "mil": "1000"}
+
+
+def _same_sound(said: str, heard: str) -> bool:
+    """«cinco» y «5» o «ruge en» y «rujen» se oyen igual: Whisper escribe números y junta vocales."""
+    a, b = said.replace(" ", ""), heard.replace(" ", "")
+    if NUMBER_WORDS.get(said, said) == NUMBER_WORDS.get(heard, heard):
+        return True
+    # ge/je suenan igual, y una vocal doble se une al hablar.
+    a, b = (re.sub(r"(.)\1+", r"\1", x.replace("ge", "je").replace("gi", "ji")) for x in (a, b))
+    return bool(a) and a == b
+
+
 def compare_speech(expected: str, heard: list[dict]) -> list[dict]:
     """Palabras del guion que Whisper no oyó igual, con su segundo. Es la mejor señal de una palabra
     mal pronunciada o cortada, aunque Whisper también se equivoca: es para revisarla, no una sentencia."""
@@ -47,6 +62,8 @@ def compare_speech(expected: str, heard: list[dict]) -> list[dict]:
     differences = []
     for op, a0, a1, b0, b1 in difflib.SequenceMatcher(None, mine, keys, autojunk=False).get_opcodes():
         if op == "equal":
+            continue
+        if _same_sound(" ".join(mine[a0:a1]), " ".join(keys[b0:b1])):
             continue
         at = theirs[min(b0, len(theirs) - 1)]["start"] if theirs else 0.0
         differences.append({"t": round(float(at), 1), "esperado": " ".join(mine[a0:a1]), "oido": " ".join(keys[b0:b1])})
