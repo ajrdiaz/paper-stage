@@ -141,7 +141,7 @@ CORRECT = {
         "Este video ya existe en output/{slug}/. Corrige SOLO esto, sin rehacer lo demás:\n{correcciones}\n\n"
         "Reutiliza los scripts de tools/. Antes de sobrescribir final.mp4, mix.wav o music.wav, guarda una copia en "
         "backup/. Si solo cambia el audio, remultiplexa sin recodificar el video. Si cambia stage.html, vuelve a "
-        "renderizar solo si hace falta. Comprueba cada corrección en fotogramas o midiendo, anótala en qa.md y deja final.mp4 listo."
+        "renderizar solo si hace falta. Si cambia lo que se ve, actualiza `visual` en script.json: la revisión lo compara con el video. Comprueba cada corrección en fotogramas o midiendo, anótala en qa.md y deja final.mp4 listo."
     ),
     "en": (
         "This video already exists in output/{slug}/. Fix ONLY this, without redoing anything else:\n{correcciones}\n\n"
