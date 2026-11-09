@@ -24,6 +24,8 @@ FILE = "revision.json"
 FRAMES_DIR = "revision"
 FRAME_EVERY = 3  # segundos entre fotogramas: bastante para ver cada escena sin gastar de más
 MAX_SUGGESTIONS = 12
+COVER_MIN_S, COVER_MAX_S = 0.5, 2.5  # debe coincidir con frame_portada_s en §11 del prompt: el gancho, ya completo
+COVER_THUMB_WIDTH = 270  # lo que mide una portada en la cuadrícula de un perfil, aproximadamente
 MIN_PACE, MAX_PACE = 130, 190  # palabras por minuto de una narración cómoda de seguir
 UNSURE_WORD = 0.45  # probabilidad de Whisper por debajo de la cual una palabra quizá no se entiende
 LONG_PAUSE, FROZEN = 1.2, 1.5  # segundos
@@ -160,7 +162,7 @@ def measured_suggestions(data: dict) -> list[dict]:
 
 REVIEW_PROMPT = """Eres el editor jefe de una cuenta de TikTok de videos explicativos para adultos. Revisa este video antes de publicarlo: sé exigente y concreto, como si tu cuenta dependiera de él.
 
-Tienes un fotograma cada {cada} segundos, en orden (el primero es el segundo 0), y al final la portada si la hay. No puedes oír el video: de eso se ocupan otras medidas.
+Tienes un fotograma cada {cada} segundos, en orden (el primero es el segundo 0),. No puedes oír el video: de eso se ocupan otras medidas.
 
 Serie: {serie}. Estilo que debe tener: {estilo}
 
@@ -178,14 +180,13 @@ Busca:
 - Ritmo: tramos que se repiten o que aburren.
 - Calidad: ¿parece hecho por profesionales o una presentación?
 - Primer fotograma: ¿el gancho se lee y da ganas de seguir?
-- Portada: ¿se lee y atrae?
 
 Reglas: solo problemas reales que veas, no gustos. Como mucho {maximo}, de más a menos importante. «correccion» es una instrucción directa y concreta para quien lo va a arreglar en stage.html.
 
 Responde solo con JSON, sin texto alrededor:
 {{"resumen": "2 frases: qué tal está y qué es lo más urgente",
   "puntaje_visual": 7,
-  "sugerencias": [{{"gravedad": "alta, media o baja", "t": 12, "tipo": "imagen, texto, comprension, ritmo, calidad o portada", "problema": "...", "correccion": "..."}}]}}"""
+  "sugerencias": [{{"gravedad": "alta, media o baja", "t": 12, "tipo": "imagen, texto, comprension, ritmo o calidad", "problema": "...", "correccion": "..."}}]}}"""
 
 
 def clean_suggestions(items: list) -> list[dict]:
@@ -205,6 +206,11 @@ def clean_suggestions(items: list) -> list[dict]:
     return clean[:MAX_SUGGESTIONS]
 
 
+def _image_blocks(images: list[Path]) -> list[dict]:
+    return [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(p.read_bytes()).decode()}}
+            for p in images if p.exists()]
+
+
 async def visual_review(out_dir: Path, frames: list[dict], measures: dict, request_serie: dict | None) -> dict:
     script = library.read_json(out_dir / "script.json")
     script = script if isinstance(script, dict) else {}
@@ -218,16 +224,89 @@ async def visual_review(out_dir: Path, frames: list[dict], measures: dict, reque
     prompt = REVIEW_PROMPT.format(cada=FRAME_EVERY, serie=ficha.get("nombre") or library.script_serie(script),
                                   estilo=ficha.get("estilo") or "(sin definir)",
                                   guion="\n".join(lines) or "(sin guion)", medidas=json.dumps(measures, ensure_ascii=False), maximo=MAX_SUGGESTIONS)
-    images = [out_dir / f["archivo"] for f in frames]
-    if (out_dir / "portada.jpg").exists():
-        images.append(out_dir / "portada.jpg")
-    content = [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(p.read_bytes()).decode()}}
-               for p in images if p.exists()]
+    content = _image_blocks([out_dir / f["archivo"] for f in frames])
     text, _ = await ask_claude([*content, {"type": "text", "text": prompt}])
     data = _extract_json(text, "{")
     if not isinstance(data, dict):
         raise RadarError("Claude no devolvió el formato esperado.")
     return data
+
+
+COVER_PROMPT = """Valida la portada de un video de TikTok para adultos. Es el fotograma exacto que verá la gente. La primera imagen es esa portada a {ancho} px de ancho, como se ve en la cuadrícula de un perfil; la segunda, a tamaño completo.
+
+Juzga la primera, la pequeña: si algo solo se aprecia en la grande, no cuenta. Sé estricto: la portada decide si alguien abre el video.
+
+Responde solo con JSON, sin texto alrededor:
+{{"texto": "las palabras que puedes leer sin esfuerzo en la miniatura, tal cual; vacío si no lees ninguna",
+  "texto_se_lee": true,
+  "sujeto_nitido": true,
+  "subtitulos_encima": false,
+  "problema": "qué falla, en una frase; vacío si está bien",
+  "correccion": "instrucción concreta para arreglarlo; vacía si está bien"}}
+
+«texto_se_lee» es true solo si el mensaje principal se lee entero y destaca del fondo. «sujeto_nitido» es false si el sujeto está borroso, lavado por halos o niebla, o no se reconoce. «subtitulos_encima» es true si, además del título, hay una línea de subtítulos o rótulos que compiten con él."""
+
+
+def cover_verdict(publish: dict, gancho: str, raw: dict | None, generated: bool = True) -> dict:
+    """El veredicto lo da el código: el segundo y el texto del gancho se comprueban; lo visual,
+    con lo que Claude ve en la miniatura. Sin esa mirada, la portada queda «sin validar» y no «bien»."""
+    problems: list[str] = []
+    fixes = [f"Pon frame_portada_s entre {COVER_MIN_S} y {COVER_MAX_S} s, en un momento con el gancho completo y quieto y sin subtítulos encima."]
+    t = None
+    try:
+        t = float(publish["frame_portada_s"])
+    except (KeyError, TypeError, ValueError):
+        problems.append("publish.json no indica el fotograma de la portada: lo elegiría TikTok.")
+    if t is not None and not COVER_MIN_S <= t <= COVER_MAX_S:
+        problems.append(f"La portada es el fotograma del segundo {t:g}, fuera del gancho ({COVER_MIN_S}–{COVER_MAX_S} s).")
+    if not generated:
+        problems.append("No se pudo sacar ese fotograma del video.")
+    text = ""
+    if raw:
+        text = " ".join(str(raw.get("texto") or "").split())
+        if raw.get("texto_se_lee") is not True:
+            problems.append(f"El texto no se lee bien en miniatura{f' (se lee «{text}»)' if text else ''}.")
+        elif gancho and not set(map(_plain, gancho.split())) <= set(map(_plain, text.split())):
+            problems.append(f"La miniatura no muestra el gancho «{gancho}»: se lee «{text}».")
+        if raw.get("sujeto_nitido") is not True:
+            problems.append("El sujeto no se ve nítido en miniatura.")
+        if raw.get("subtitulos_encima") is not False:
+            problems.append("Hay subtítulos o rótulos que compiten con el título.")
+        if str(raw.get("problema") or "").strip() and problems:
+            problems.append(str(raw["problema"]).strip()[:300])
+        if str(raw.get("correccion") or "").strip():
+            fixes.append(str(raw["correccion"]).strip()[:300])
+    ok = False if problems else (True if raw else None)
+    return {"ok": ok, "t": t, "texto": text, "problemas": problems, "correccion": " ".join(fixes) if problems else ""}
+
+
+def cover_suggestions(cover: dict) -> list[dict]:
+    if cover.get("ok") is not False:
+        return []
+    return [{"origen": "medicion", "gravedad": "alta", "t": cover.get("t") or 0.0, "tipo": "portada",
+             "problema": " ".join(cover["problemas"])[:500], "correccion": cover["correccion"][:600]}]
+
+
+async def validate_cover(out_dir: Path) -> dict:
+    """Mira la portada real, la que sale de final.mp4, al tamaño al que se decide si se abre."""
+    publish, script = library.read_json(out_dir / "publish.json"), library.read_json(out_dir / "script.json")
+    publish = publish if isinstance(publish, dict) else {}
+    gancho = " ".join(str(script.get("texto_gancho") or "").split()) if isinstance(script, dict) else ""
+    image = await asyncio.to_thread(library.cover, out_dir)
+    if not image:
+        return cover_verdict(publish, gancho, None, generated=False)
+    (out_dir / FRAMES_DIR).mkdir(parents=True, exist_ok=True)
+    mini = out_dir / FRAMES_DIR / "portada_mini.jpg"
+    try:
+        await asyncio.to_thread(subprocess.run, ["ffmpeg", "-y", "-loglevel", "error", "-i", str(image), "-vf", f"scale={COVER_THUMB_WIDTH}:-2",
+                                                 "-q:v", "3", str(mini)], check=True, capture_output=True, timeout=60)
+        text, _ = await ask_claude([*_image_blocks([mini, image]), {"type": "text", "text": COVER_PROMPT.format(ancho=COVER_THUMB_WIDTH)}])
+        raw = _extract_json(text, "{")
+        if not isinstance(raw, dict):
+            raise RadarError("Claude no devolvió el formato esperado.")
+    except Exception as exc:  # noqa: BLE001 — un fallo aquí no afecta al video: queda sin validar
+        return {**cover_verdict(publish, gancho, None), "error": f"No se pudo mirar la portada: {exc}"[:300]}
+    return cover_verdict(publish, gancho, raw)
 
 
 def save(out_dir: Path, data: dict) -> dict:
@@ -262,7 +341,8 @@ async def review_video(out_dir: Path, serie: dict | None = None) -> dict:
         "diferencias": compare_speech(expected, words) if expected else [],
         "inseguras": [{"t": round(w["start"], 1), "word": w["word"], "prob": round(w["prob"], 2)} for w in words if w["prob"] < UNSURE_WORD],
     }
-    suggestions = measured_suggestions(data)
+    data["portada"] = await validate_cover(out_dir)
+    suggestions = measured_suggestions(data) + cover_suggestions(data["portada"])
     measures = {k: data[k] for k in ("duracion", "palabras_minuto", "pico_db", "cortes", "congelados", "negros")}
     try:
         visual = await visual_review(out_dir, frames, measures, serie)

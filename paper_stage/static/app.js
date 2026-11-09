@@ -867,7 +867,8 @@ async function renderVideo(slug) {
         ${v.has_video ? `<h3>Portada</h3>
           <div class="cover-row"><img class="cover" src="/cover/${esc(v.slug)}.jpg" alt="Portada del video" loading="lazy" onerror="this.parentElement.remove()">
             <div class="stack"><a class="btn small" href="/cover/${esc(v.slug)}.jpg" download="${esc(v.slug)}-portada.jpg">Descargar portada</a>
-            ${publish.texto_portada ? `<p class="small muted">“${esc(publish.texto_portada)}” sobre el fotograma de ${esc(publish.frame_portada_s)} s</p>` : ""}</div></div>` : ""}
+            <p class="small muted">Fotograma del segundo ${esc(publish.frame_portada_s ?? 1)}: es la portada que usará TikTok.</p>
+            ${coverCheck(v.revision && v.revision.portada)}</div></div>` : ""}
         ${(publish.ideas_siguientes || []).length ? `<h3>Ideas para los siguientes videos</h3><div class="chips">${publish.ideas_siguientes.map(i =>
           `<a class="chip" href="#/?tema=${encodeURIComponent(i)}&${who}&idioma=${esc(v.idioma || "es")}&formato=${esc(req.formato)}">+ ${esc(i)}</a>`).join("")}</div>` : ""}
       </div>`,
@@ -951,6 +952,11 @@ async function renderVideo(slug) {
   });
 }
 
+// El resultado de validar la portada; sin esa mirada se dice «sin validar», nunca «bien».
+const coverCheck = c => !c || c.ok === null || c.ok === undefined
+  ? `<p class="small muted">Portada sin validar: míralo tú en pequeño antes de publicar.</p>`
+  : c.ok ? `<p class="small">Portada validada: en miniatura se lee «${esc(c.texto)}».</p>`
+    : `<p class="small" style="color:var(--warn)"><strong>Portada con problemas.</strong> ${esc(c.problemas.join(" "))}</p>`;
 const REVIEW_KIND = { audio: "Audio", imagen: "Imagen", texto: "Texto", comprension: "Comprensión", ritmo: "Ritmo", calidad: "Calidad", portada: "Portada" };
 
 function reviewTab(v) {

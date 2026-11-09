@@ -258,7 +258,7 @@ async def run_demo(
             "descripcion_corta": "Video de ejemplo del modo demostración.",
             "descripcion": "Video de ejemplo generado en modo demostración.",
             "hashtags": ["#shorts", "#ciencia", "#sabiasque", "#curiosidades", ficha.hashtag],
-            "texto_portada": title, "frame_portada_s": 1.5, "color_acento": "#FF8A3D", "serie": ficha.id,
+            "frame_portada_s": 1.0, "serie": ficha.id,
             "ideas_siguientes": ["Por qué te da hipo", "Por qué se duerme una pierna", "Por qué bostezamos"],
         }, ensure_ascii=False, indent=2)), None),
         ("Write", "qa.md", lambda: _write(out / "qa.md",
@@ -428,7 +428,8 @@ async def review_demo(out_dir: Path, serie: dict | None = None) -> dict:
     return save(out_dir, {
         "resumen": "Modo demostración: aquí va la opinión de Claude sobre el video.", "puntaje_visual": 6,
         "duracion": 62.5, "palabras_minuto": 165, "pico_db": -1.0, "cortes": 12, "congelados": [], "negros": [],
-        "fotogramas": [], "transcripcion": "Modo demostración.", "diferencias": [{"t": 57.7, "esperado": "etiqueta", "oido": "tiqueta"}],
+        "fotogramas": [], "portada": {"ok": True, "t": 1.0, "texto": "Texto de ejemplo", "problemas": [], "correccion": ""},
+        "transcripcion": "Modo demostración.", "diferencias": [{"t": 57.7, "esperado": "etiqueta", "oido": "tiqueta"}],
         "sugerencias": [
             {"origen": "medicion", "gravedad": "alta", "t": 57.7, "tipo": "audio", "problema": "El guion dice «etiqueta», pero se transcribe «tiqueta».",
              "correccion": "Regenera esa frase del TTS sin recortar el inicio de la palabra."},

@@ -93,13 +93,9 @@ def _publish(out_dir: Path) -> dict:
 
 def _cover_time(publish: dict) -> float:
     try:
-        return float(publish.get("frame_portada_s", 1.5))
+        return float(publish.get("frame_portada_s", 1.0))
     except (TypeError, ValueError):
-        return 1.5
-
-
-STAGE_BROWSER_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]  # WebGL sin ventana, para stage.html en 3D
-HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+        return 1.0
 
 
 def _fresh(target: Path, *sources: Path) -> bool:
@@ -107,66 +103,19 @@ def _fresh(target: Path, *sources: Path) -> bool:
         target.stat().st_mtime >= src.stat().st_mtime for src in sources if src.exists())
 
 
-# Oculta los subtítulos y escribe texto_portada en su lugar, con el color de la palabra activa
-# (color_acento en publish.json), reduciéndolo hasta que quepa.
-_COVER_JS = """({text, color}) => {
-  const subs = document.getElementById("subs");
-  // Grande y en la zona segura: la caja de los subtítulos puede ser muy pequeña para una portada.
-  const box = {x: innerWidth * .08, y: innerHeight * .6, w: innerWidth * .8, h: innerHeight * .2};
-  if (subs) subs.style.visibility = "hidden";
-  if (!text) return;
-  const el = document.createElement("div");
-  Object.assign(el.style, {
-    position: "fixed", left: box.x + "px", top: box.y + "px", width: box.w + "px", height: box.h + "px",
-    display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",
-    padding: "0 " + box.w * .04 + "px", boxSizing: "border-box",
-    fontFamily: "'Fredoka', sans-serif", fontWeight: "700", lineHeight: "1.05",
-    color, WebkitTextStroke: "3px rgba(0, 0, 0, .85)", paintOrder: "stroke fill",
-    textShadow: "0 6px 24px rgba(0, 0, 0, .8)", zIndex: 99999,
-  });
-  el.textContent = text;
-  document.body.appendChild(el);
-  let size = box.h * .6;
-  do { el.style.fontSize = size + "px"; size -= 2; }
-  while ((el.scrollHeight > box.h || el.scrollWidth > box.w) && size > 20);
-}"""
-
-
 def cover(out_dir: Path) -> Path | None:
-    """Genera portada.jpg a tamaño completo para subirla a las redes: el fotograma de
-    frame_portada_s de stage.html, sin subtítulos y con texto_portada en su franja."""
-    stage, video, image = out_dir / "stage.html", out_dir / "final.mp4", out_dir / "portada.jpg"
-    if not stage.exists() or not video.exists():
+    """Genera portada.jpg: el fotograma exacto de final.mp4 que TikTok usa como portada
+    (frame_portada_s). No se le añade nada, para que la app enseñe lo que se va a publicar."""
+    video, image = out_dir / "final.mp4", out_dir / "portada.jpg"
+    if not video.exists() or not shutil.which("ffmpeg"):
         return None
-    if _fresh(image, stage, video, out_dir / "publish.json"):
+    if _fresh(image, video, out_dir / "publish.json"):
         return image
-    size = _video_size(video)
-    if not size:
-        return None
-    publish = _publish(out_dir)
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return None
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(args=STAGE_BROWSER_ARGS)
-            try:
-                page = browser.new_page(viewport={"width": size[0], "height": size[1]})
-                page.goto(stage.resolve().as_uri())
-                page.wait_for_function(
-                    "typeof window.renderAt === 'function' && window.READY !== false", timeout=30000)
-                page.evaluate("document.fonts.ready")
-                # Sin devolver nada: si renderAt devuelve un objeto grande (p. ej. una timeline
-                # de GSAP), evaluate intenta serializarlo y se cuelga.
-                page.evaluate(f"() => {{ window.renderAt({_cover_time(publish)}); }}")
-                accent = str(publish.get("color_acento") or "")
-                page.evaluate(_COVER_JS, {"text": str(publish.get("texto_portada") or "").strip(),
-                                          "color": accent if HEX_COLOR.match(accent) else "#FFFFFF"})
-                page.screenshot(path=str(image), type="jpeg", quality=92)
-            finally:
-                browser.close()
-    except Exception:  # noqa: BLE001 — sin portada no se rompe nada: queda el fotograma del video
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-ss", str(_cover_time(_publish(out_dir))), "-i", str(video),
+             "-frames:v", "1", "-q:v", "2", str(image)], check=True, capture_output=True, timeout=60)
+    except (subprocess.SubprocessError, OSError):  # sin portada no se rompe nada
         image.unlink(missing_ok=True)
         return None
     return image if image.exists() else None

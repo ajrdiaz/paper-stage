@@ -591,6 +591,17 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
         await pub.tasks[slug]
         return pub.status[slug]
 
+    def test_cover_is_the_frame_tiktok_gets(self):
+        out = core.OUTPUT_DIR / self.slug
+        publishing._test_video(out / "final.mp4")
+        (out / "publish.json").write_text(json.dumps({"frame_portada_s": 0.5}), encoding="utf-8")
+        image = library.cover(out)  # sin stage.html: sale del video, sin texto añadido
+        self.assertTrue(image and image.stat().st_size > 0)
+        (out / "publish.json").write_text(json.dumps({"frame_portada_s": 99}), encoding="utf-8")
+        os.utime(out / "publish.json", (time.time() + 5, time.time() + 5))
+        self.assertIsNone(library.cover(out))  # fuera del video: sin portada, y nunca una vieja
+        self.assertFalse((out / "portada.jpg").exists())
+
     def test_helpers(self):
         self.assertEqual(publishing.text_units("🕷️a"), 4)  # un emoji cuenta 2 (más el selector de variante)
         text = publishing.default_text(json.loads((core.OUTPUT_DIR / self.slug / "publish.json").read_text()))
@@ -790,6 +801,28 @@ class ReviewTests(unittest.TestCase):
                "[blackdetect] black_start:1.5 black_end:2 black_duration:0.5\n"
                "lavfi.scene_score=0.4\nlavfi.scene_score=0.5\n")
         self.assertEqual(review.parse_video_filters(log), {"congelados": [(12.5, 3.2)], "negros": [(1.5, 0.5)], "cortes": 2})
+
+    def test_cover_verdict(self):
+        good = {"texto": "¿Tu panza ruge en pleno SILENCIO?", "texto_se_lee": True, "sujeto_nitido": True, "subtitulos_encima": False}
+        gancho = "¿Tu panza ruge en pleno SILENCIO?"
+        verdict = review.cover_verdict({"frame_portada_s": 1.0}, gancho, good)
+        self.assertTrue(verdict["ok"])
+        self.assertEqual(review.cover_suggestions(verdict), [])
+        # Lo que pasó con la portada de las tripas: un fotograma fuera del gancho, con subtítulos.
+        verdict = review.cover_verdict({"frame_portada_s": 3.7}, gancho, {**good, "texto": "Siempre en el peor momento", "subtitulos_encima": True})
+        self.assertFalse(verdict["ok"])
+        self.assertEqual(len(verdict["problemas"]), 3)  # segundo, gancho y subtítulos
+        found = review.cover_suggestions(verdict)
+        self.assertEqual((found[0]["gravedad"], found[0]["tipo"], found[0]["t"]), ("alta", "portada", 3.7))
+        self.assertTrue(found[0]["correccion"])
+        for mala in ({"texto_se_lee": False}, {"sujeto_nitido": False}, {"subtitulos_encima": True}, {"sujeto_nitido": None}):
+            self.assertFalse(review.cover_verdict({"frame_portada_s": 1.0}, gancho, {**good, **mala})["ok"], mala)
+        # Sin la mirada de Claude no se da por buena, pero lo medido sigue valiendo.
+        self.assertIsNone(review.cover_verdict({"frame_portada_s": 1.0}, gancho, None)["ok"])
+        self.assertEqual(review.cover_suggestions(review.cover_verdict({"frame_portada_s": 1.0}, gancho, None)), [])
+        self.assertFalse(review.cover_verdict({"frame_portada_s": 9}, gancho, None)["ok"])
+        self.assertFalse(review.cover_verdict({}, gancho, None)["ok"])
+        self.assertFalse(review.cover_verdict({"frame_portada_s": 1.0}, gancho, None, generated=False)["ok"])
 
     def test_claude_suggestions_are_cleaned(self):
         clean = review.clean_suggestions([
