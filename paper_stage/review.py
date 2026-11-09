@@ -154,6 +154,7 @@ Medidas: {medidas}
 
 Busca:
 - Imagen: ¿cada objeto se reconoce sin narración? ¿lo que se ve corresponde a lo que se dice en ese segundo?
+- Anatomía y formas: mira de cerca cada cuerpo u objeto. ¿Sus partes encajan (dedos con la palma, brazo con la mano), o hay huecos, piezas sueltas o líneas que se cortan? ¿Sus proporciones son creíbles? Es lo primero que delata un video barato: repórtalo como gravedad alta.
 - Texto: subtítulos legibles, grandes y sin tapar al sujeto; faltas de ortografía; nada en las zonas que tapa la interfaz (230 px de arriba, 400 de abajo y 120 de la derecha sobre 1920×1080).
 - Comprensión: ¿se entiende sin sonido? ¿algo confunde?
 - Ritmo: tramos que se repiten o que aburren.
