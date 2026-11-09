@@ -1498,6 +1498,9 @@ async function renderRadar(params) {
   let tab = ["videos", "cuentas", "patrones", "nichos", "ideas"].includes(params.get("tab")) ? params.get("tab") : "videos";
   const filters = { handle: "", days: "14", viral: false, sort: "multiple" };
   let adding = "", nicheTema = "", lastDrawn = "";
+  // Se abre en el mercado de la última búsqueda.
+  let nicheMarket = data.niche_runs[0]?.mercado || data.config.default_market;
+  const marketOf = id => data.config.markets.find(m => m.id === id) || { id, nombre: id, propio: true };
 
   const tabsHtml = () => [["videos", "Videos"], ["cuentas", "Cuentas"], ["patrones", "Patrones"], ["nichos", "Nichos"], ["ideas", "Ideas"]]
     .map(([k, label]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${label}</button>`).join("");
@@ -1578,7 +1581,7 @@ async function renderRadar(params) {
         ${n.cuentas.some(h => !known.has(h)) ? `<button type="button" class="btn small" data-watch="${esc(n.cuentas.join(","))}">Añadir al Radar y leerlas</button>` : ""}</div>` : ""}
       ${foundAccounts(n)}
       ${n.busqueda_error ? `<p class="small" style="color:var(--warn)" role="alert">${esc(n.busqueda_error)}</p>` : ""}
-      <div class="row">${data.active_niche?.nicho === n.nicho ? `<span class="pill done">Nicho elegido</span>
+      <div class="row">${data.active_niche?.nicho === n.nicho && (data.active_niche.mercado || "es") === run.mercado ? `<span class="pill done">Nicho elegido</span>
           <a class="small" href="#/series/nueva?nicho=${encodeURIComponent(n.nicho.slice(0, 120))}">Crear otra serie con este nicho</a>`
         : `<button type="button" class="btn small primary" data-choose="${esc(run.id)}:${index}">Elegir este nicho</button>`}</div>
       ${data.config.can_search ? `<div class="row"><button type="button" class="btn small" data-search="${esc(run.id)}:${index}" ${n.buscando ? "disabled" : ""}>${n.buscando ? "Buscando cuentas…" : (n.encontradas || []).length ? "Buscar otra vez" : "Buscar cuentas en TikTok"}</button>
@@ -1588,19 +1591,26 @@ async function renderRadar(params) {
   const nichesTab = () => {
     const known = new Map(data.accounts.map(a => [a.handle, a]));
     const running = data.niche_runs.some(r => r.status === "running");
+    const market = marketOf(nicheMarket);
+    const runs = data.niche_runs.filter(r => r.mercado === nicheMarket);
     return `
+      <div class="chips" role="group" aria-label="Mercado">${data.config.markets.map(m => {
+        const count = data.niche_runs.filter(r => r.mercado === m.id).length;
+        return `<button type="button" class="btn small ${m.id === nicheMarket ? "primary" : ""}" data-market="${esc(m.id)}" aria-pressed="${m.id === nicheMarket}">${esc(m.nombre)}${count ? ` (${count})` : ""}</button>`;
+      }).join("")}</div>
       <form id="find-niches" class="row">
         <input type="text" id="niche-tema" class="radar-input" maxlength="120" value="${esc(nicheTema)}" autocomplete="off" aria-label="Tema (opcional)" placeholder="Tema opcional: coches, cocina, dinero…">
         <button class="btn primary" ${running ? "disabled" : ""}>${running ? "Buscando…" : "Buscar nichos"}</button>
       </form>
-      <p class="small muted">Claude busca en la web y usa los virales del Radar como pista. Cada prueba lleva su enlace; sin ninguno, el puntaje no pasa de 6. Para ver cuentas reales de un nicho, usa «Buscar cuentas en TikTok»; al añadir una, se lee y ves sus cifras.</p>
-      ${data.niche_runs.length ? data.niche_runs.map((r, i) => {
+      <p class="small muted">${market.propio ? "Claude busca en la web y usa los virales del Radar como pista."
+        : `Claude investiga este mercado y te lo cuenta en español. No usa tus cuentas del Radar, porque no son de aquí. Si eliges un nicho, las ideas llevan lo que funciona a tu canal, sin traducir videos de allá.`} El mercado orienta la búsqueda, pero no garantiza que todo sea de ahí. Cada prueba lleva su enlace; sin ninguno, el puntaje no pasa de 6. Para ver cuentas reales de un nicho, usa «Buscar cuentas en TikTok»; al añadir una, se lee y ves sus cifras.</p>
+      ${runs.length ? runs.map((r, i) => {
         const title = `${r.tema ? esc(r.tema) : "Todos los temas"} · ${fmtDate(r.created_at)}`;
         const body = r.status === "running" ? `<p class="small muted loading"><span class="spinner" aria-hidden="true"></span>Investigando; puede tardar unos minutos…</p>`
           : r.status === "failed" ? `<p class="small" style="color:var(--warn)" role="alert">${esc(r.error)}</p>`
           : `<div class="stack">${r.nichos.map((n, k) => nicheCard(n, known, r, k)).join("")}</div>`;
         return `<details class="radar-run" ${i === 0 ? "open" : ""}><summary><strong>${title}</strong></summary>${body}</details>`;
-      }).join("") : `<div class="card empty"><span class="big">Aún no hay búsquedas</span>Déjalo vacío para ver todo, o escribe un tema.</div>`}`;
+      }).join("") : `<div class="card empty"><span class="big">Aún no hay búsquedas en ${esc(market.nombre)}</span>Déjalo vacío para ver todo, o escribe un tema.</div>`}`;
   };
 
   // Solo lo que el usuario ve y aprueba en el Estudio llega al agente de producción.
@@ -1613,6 +1623,7 @@ async function renderRadar(params) {
   const ideaCard = i => `
     <article class="card stack radar-niche">
       <div class="row"><h3>${esc(i.tema)}</h3><span class="spacer"></span>
+        ${i.mercado ? `<span class="pill plain">${esc(marketOf(i.mercado).nombre)}</span>` : ""}
         ${i.usada ? `<span class="pill done">Ya producida</span>` : `<a class="btn small primary" href="${esc(produceLink(i))}">Producir</a>`}
         <button type="button" class="btn small danger" data-discard="${esc(i.id)}">Descartar</button></div>
       ${i.gancho ? `<p><strong>Gancho:</strong> ${esc(i.gancho)}</p>` : ""}
@@ -1624,7 +1635,7 @@ async function renderRadar(params) {
     </article>`;
 
   const ideasTab = () => data.active_niche ? `
-      <div class="row"><div><span class="small muted">Nicho elegido</span><h3>${esc(data.active_niche.nicho)}</h3></div><span class="spacer"></span>
+      <div class="row"><div><span class="small muted">Nicho elegido · ${esc(marketOf(data.active_niche.mercado || "es").nombre)}</span><h3>${esc(data.active_niche.nicho)}</h3></div><span class="spacer"></span>
         <button type="button" class="btn primary" id="make-ideas" ${data.making_ideas ? "disabled" : ""}>${data.making_ideas ? "Pensando…" : "Generar 5 ideas"}</button></div>
       <p class="small muted">Claude toma el patrón de los virales y de lo que hayas analizado, nunca su tema ni sus frases. Cuantos más videos del nicho analices, mejores ideas. Las descartadas no vuelven a salir.</p>
       ${data.ideas_error ? `<p class="small" style="color:var(--warn)" role="alert">${esc(data.ideas_error)}</p>` : ""}
@@ -1663,6 +1674,8 @@ async function renderRadar(params) {
   view.onclick = async ev => {
     const t = ev.target.closest("[data-tab]");
     if (t) { tab = t.dataset.tab; draw(); return; }
+    const marketButton = ev.target.closest("[data-market]");
+    if (marketButton) { nicheMarket = marketButton.dataset.market; draw(); return; }
     if (ev.target.closest("#radar-scan")) { await act("/api/radar/scan", { method: "POST", body: {} }); return; }
     const analyze = ev.target.closest("[data-analyze]");
     if (analyze) { await act(`/api/radar/videos/${analyze.dataset.analyze}/analyze`, { method: "POST" }); return; }
@@ -1716,7 +1729,7 @@ async function renderRadar(params) {
       try { data = await api("/api/radar/accounts", { method: "POST", body: { handle: adding } }); adding = ""; draw(); }
       catch (err) { toast(esc(err.message), "err"); }
     }
-    if (ev.target.id === "find-niches") await act("/api/radar/niches", { method: "POST", body: { tema: nicheTema } });
+    if (ev.target.id === "find-niches") await act("/api/radar/niches", { method: "POST", body: { tema: nicheTema, mercado: nicheMarket } });
   };
   // Estos manejadores viven en #view, que es de todas las vistas: se quitan al salir.
   onCleanup(() => { view.onclick = view.onchange = view.oninput = view.onsubmit = null; });

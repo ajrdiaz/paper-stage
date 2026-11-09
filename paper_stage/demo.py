@@ -371,7 +371,7 @@ async def analyze_demo(video: dict, transcript: str, images: list[bytes]) -> dic
             "que_evitar": "Copiar el mismo ejemplo o sus frases."}
 
 
-async def find_niches_demo(tema: str, context: list[dict]) -> tuple[list[dict], set[str]]:
+async def find_niches_demo(tema: str, context: list[dict], mercado: str = "mx") -> tuple[list[dict], set[str]]:
     await asyncio.sleep(min(SPEED, 0.6))
     proof = "https://example.com/tendencia"
     items = [

@@ -1159,6 +1159,64 @@ class RadarApiTests(unittest.TestCase):
             self.assertEqual(found["encontradas"][0]["handle"], "motor.curioso")
             self.assertIsNone(found["busqueda_error"])
 
+    def test_niches_are_separated_by_market(self):
+        contexts = {}
+
+        async def finder(tema, context, mercado):
+            contexts[mercado] = context
+            return await find_niches_demo(tema, context, mercado)
+
+        with self.client("data-radar-markets", niche_finder=finder) as client:
+            self.assertEqual({m["id"] for m in client.get("/api/radar").json()["config"]["markets"]}, set(radar.MARKETS))
+            self.assertEqual(client.post("/api/radar/niches", json={"mercado": "marte"}).status_code, 400)
+            client.post("/api/radar/scan", json={})
+            self.wait(client, lambda s: not s["scanning"])
+            for mercado in ("mx", "br"):
+                client.post("/api/radar/niches", json={"mercado": mercado})
+                run = self.wait(client, lambda s: s["niche_runs"][0]["status"] != "running")["niche_runs"][0]
+                self.assertEqual(run["mercado"], mercado)
+            # Las cuentas del Radar solo son pista en su propio público.
+            self.assertTrue(contexts["mx"])
+            self.assertEqual(contexts["br"], [])
+            # El nicho y sus ideas recuerdan de dónde salieron.
+            state = client.post(f"/api/radar/niches/{run['id']}/0/choose").json()
+            self.assertEqual(state["active_niche"]["mercado"], "br")
+            client.post("/api/radar/ideas")
+            state = self.wait(client, lambda s: not s["making_ideas"])
+            self.assertEqual(state["ideas"][0]["mercado"], "br")
+
+    def test_market_shapes_the_prompts(self):
+        prompts = []
+
+        async def fake_claude(prompt, tools=None, max_turns=1):
+            prompts.append(prompt)
+            return '[{"nicho": "x"}]', set()
+
+        original, radar.ask_claude = radar.ask_claude, fake_claude
+        try:
+            for mercado in ("mx", "br"):
+                asyncio.run(radar.find_niches("", [], mercado))
+                asyncio.run(radar.make_ideas({"nicho": "Coches", "mercado": mercado}, [], [], 5))
+            asyncio.run(radar.make_ideas({"nicho": "Elegido antes de los mercados"}, [], [], 5))
+        finally:
+            radar.ask_claude = original
+        niches_mx, ideas_mx, niches_br, ideas_br, ideas_old = prompts
+        self.assertIn("TikTok de México", niches_mx)
+        self.assertNotIn("llevar allí", niches_mx)
+        self.assertIn("portugués de Brasil", niches_br)
+        self.assertIn("llevar allí", niches_br)
+        self.assertIn("No traduzcas", ideas_br)
+        self.assertNotIn("No traduzcas", ideas_mx)
+        self.assertNotIn("No traduzcas", ideas_old)
+
+    def test_old_niche_runs_are_spanish(self):
+        db = sqlite3.connect(":memory:")
+        db.execute("CREATE TABLE radar_niche_runs (id TEXT PRIMARY KEY, tema TEXT NOT NULL, status TEXT NOT NULL, "
+                   "error TEXT, nichos TEXT, created_at REAL NOT NULL)")
+        db.execute("INSERT INTO radar_niche_runs VALUES ('viejo', '', 'done', NULL, '[]', 1)")
+        box = radar.Radar(db, TMP / "data-radar-old")
+        self.assertEqual(box.overview()["niche_runs"][0]["mercado"], "es")
+
     def test_ideas_come_from_the_chosen_niche(self):
         with self.client("data-radar-ideas", used_topics=lambda idioma: ["¿Por qué bostezas cuando otro bosteza?"]) as client:
             self.assertEqual(client.post("/api/radar/ideas").status_code, 409)  # sin nicho elegido

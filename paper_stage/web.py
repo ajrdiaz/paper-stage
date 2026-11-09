@@ -443,7 +443,8 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         radar.start_analysis(request.path_params["video_id"])
 
     async def _radar_niches(request: Request):
-        radar.start_niches((await _json(request)).get("tema"))
+        body = await _json(request)
+        radar.start_niches(body.get("tema"), body.get("mercado"))
 
     async def _radar_search(request: Request):
         radar.start_account_search(request.path_params["run_id"], request.path_params["index"])
