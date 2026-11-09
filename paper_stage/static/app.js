@@ -918,6 +918,15 @@ async function renderVideo(slug) {
       catch (err) { toast(esc(err.message), "err"); }
       return;
     }
+    const discardFix = e.target.closest("[data-discard-fix]");
+    if (discardFix) {
+      try {
+        await api(`/api/videos/${encodeURIComponent(v.slug)}/review/${encodeURIComponent(discardFix.dataset.discardFix)}/discard`,
+          { method: "POST", body: { descartada: discardFix.dataset.value === "1" } });
+        route();
+      } catch (err) { toast(esc(err.message), "err"); }
+      return;
+    }
     if (e.target.closest("#apply-fixes")) {
       const picked = $$("input[data-fix]:checked", bodyEl).map(i => i.dataset.fix);
       const own = $("#own-fix", bodyEl).value.trim();
@@ -959,6 +968,10 @@ const coverCheck = c => !c || c.ok === null || c.ok === undefined
     : `<p class="small" style="color:var(--warn)"><strong>Portada con problemas.</strong> ${esc(c.problemas.join(" "))}</p>`;
 const REVIEW_KIND = { audio: "Audio", imagen: "Imagen", texto: "Texto", comprension: "Comprensión", ritmo: "Ritmo", calidad: "Calidad", portada: "Portada" };
 
+// Lo que dijo la segunda mirada a un aviso grave de Claude.
+const VERIFY_LABEL = { confirmado: "confirmado", menor: "menor: no justifica rehacerlo", falso: "no se confirmó", "sin verificar": "sin verificar" };
+const verifyLabel = c => c ? `<span class="muted">· ${esc(VERIFY_LABEL[c.veredicto] || c.veredicto)}</span>` : "";
+
 function reviewTab(v) {
   const r = v.revision;
   if (v.revisando) return `<p class="small muted loading"><span class="spinner" aria-hidden="true"></span>Revisando audio y video; tarda unos minutos…</p>`;
@@ -979,10 +992,10 @@ function reviewTab(v) {
         ${stat("palabras distintas al guion", (r.diferencias || []).length)}
         ${stat("cortes de escena", r.cortes)}
       </div>
-      <p class="small muted">Se mide y se transcribe el audio, y se revisa un fotograma cada 3 s. Nadie ha oído el video: <strong>escúchalo tú una vez</strong>, porque la naturalidad y la entonación no se pueden medir.</p>
+      <p class="small muted">Se mide y se transcribe el audio, se revisa un fotograma cada 3 s y cada aviso grave se comprueba otra vez en los fotogramas de ese momento. Nadie ha oído el video: <strong>escúchalo tú una vez</strong>, porque la naturalidad y la entonación no se pueden medir.</p>
       ${items.length ? `<div class="review-list">${items.map(s => `
-        <div class="review-item">
-          <input type="checkbox" id="fix-${esc(s.id)}" data-fix="${esc(s.correccion)}" ${s.gravedad !== "baja" && s.correccion ? "checked" : ""} aria-label="Aplicar esta corrección">
+        <div class="review-item ${s.descartada ? "discarded" : ""}">
+          <input type="checkbox" id="fix-${esc(s.id)}" data-fix="${esc(s.correccion)}" ${s.gravedad !== "baja" && s.correccion && !s.descartada ? "checked" : ""} aria-label="Aplicar esta corrección">
           ${s.fotograma ? `<img src="/files/${esc(v.slug)}/${esc(s.fotograma)}" alt="" loading="lazy">` : ""}
           <div class="review-text">
             <div class="row small">
@@ -990,9 +1003,12 @@ function reviewTab(v) {
               <span class="muted">${esc(REVIEW_KIND[s.tipo] || s.tipo)}</span>
               <button type="button" class="link-btn" data-seek="${esc(s.t)}">Ver segundo ${esc(Math.round(s.t))}</button>
               ${s.origen === "medicion" ? `<span class="muted">· medido</span>` : ""}
+              ${verifyLabel(s.verificacion)}
+              <button type="button" class="link-btn" data-discard-fix="${esc(s.id)}" data-value="${s.descartada ? "0" : "1"}">${s.descartada ? "Recuperar" : "Descartar"}</button>
             </div>
             <label for="fix-${esc(s.id)}"><strong>${esc(s.problema)}</strong></label>
             ${s.correccion ? `<span class="small muted">${esc(s.correccion)}</span>` : ""}
+            ${s.verificacion && s.verificacion.motivo ? `<span class="small muted"><strong>Segunda mirada:</strong> ${esc(s.verificacion.motivo)}</span>` : ""}
           </div>
         </div>`).join("")}</div>` : `<p>No se encontraron problemas.</p>`}
       <div class="field"><label for="own-fix">Añade tu propia corrección <span class="small muted">(opcional)</span></label>

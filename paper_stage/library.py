@@ -311,7 +311,7 @@ def script_serie(script: dict | None) -> str:
 
 def _serious_suggestions(out_dir: Path) -> int:
     review = read_json(out_dir / "revision.json")
-    return sum(s.get("gravedad") == "alta" for s in review.get("sugerencias", [])) if isinstance(review, dict) else 0
+    return sum(s.get("gravedad") == "alta" and not s.get("descartada") for s in review.get("sugerencias", [])) if isinstance(review, dict) else 0
 
 
 def summary(out_dir: Path) -> dict:

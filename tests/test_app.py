@@ -418,6 +418,14 @@ class AppTests(unittest.TestCase):
             self.assertEqual(video["revision_altas"], 1)
             self.assertEqual(next(v for v in client.get("/api/videos").json() if v["slug"] == slug)["revision_altas"], 1)
 
+            # Un aviso descartado deja de contar, y se puede recuperar.
+            sid = video["revision"]["sugerencias"][0]["id"]
+            self.assertEqual(client.post(f"/api/videos/{slug}/review/{sid}/discard", json={"descartada": True}).status_code, 200)
+            self.assertEqual(client.get(f"/api/videos/{slug}").json()["revision_altas"], 0)
+            client.post(f"/api/videos/{slug}/review/{sid}/discard", json={"descartada": False})
+            self.assertEqual(client.get(f"/api/videos/{slug}").json()["revision_altas"], 1)
+            self.assertEqual(client.post(f"/api/videos/{slug}/review/s999/discard", json={}).status_code, 404)
+
             self.assertEqual(client.post(f"/api/videos/{slug}/corrections", json={"correcciones": []}).status_code, 409)
             self.assertEqual(client.post(f"/api/videos/{slug}/corrections", json={"correcciones": "x"}).status_code, 409)
             self.assertEqual(client.post("/api/videos/no-existe/corrections", json={"correcciones": ["x"]}).status_code, 409)
@@ -810,6 +818,47 @@ class ReviewTests(unittest.TestCase):
                             "-pix_fmt", "yuv420p", str(video)], check=True)
             self.assertEqual(len(review.extract_closing_frames(video, out / "r", 10.0)), review.CLOSING_SECONDS)
             self.assertEqual(len(review.extract_closing_frames(video, out / "r", 13.0)), 3)  # menos fotogramas: sin restos de antes
+
+    def test_verdict_decides_the_severity(self):
+        item = {"gravedad": "alta", "problema": "x"}
+        self.assertEqual(review.apply_verdict(item, {"veredicto": "Confirmado", "motivo": "se ve"})["gravedad"], "alta")
+        self.assertEqual(review.apply_verdict(item, {"veredicto": "menor"})["gravedad"], "media")
+        self.assertEqual(review.apply_verdict(item, {"veredicto": "falso"})["gravedad"], "baja")
+        # Sin respuesta clara no se quita el aviso.
+        for raw in (None, {}, {"veredicto": "quizá"}):
+            result = review.apply_verdict(item, raw)
+            self.assertEqual((result["gravedad"], result["verificacion"]["veredicto"]), ("alta", "sin verificar"))
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "hace falta ffmpeg")
+    def test_only_claudes_serious_warnings_are_checked_again(self):
+        answers = {"inventado": "falso", "real": "confirmado"}
+
+        async def fake_claude(content, tools=None, max_turns=1):
+            prompt = content[-1]["text"]
+            self.assertTrue(all(c["type"] == "image" for c in content[:-1]) and len(content) > 1)
+            if "falla" in prompt:
+                raise RuntimeError("sin red")
+            return json.dumps({"veredicto": next(v for k, v in answers.items() if k in prompt), "motivo": "visto"}), set()
+
+        items = [{"origen": "claude", "gravedad": "alta", "t": 2.0, "problema": "inventado"},
+                 {"origen": "claude", "gravedad": "alta", "t": 2.0, "problema": "real"},
+                 {"origen": "claude", "gravedad": "alta", "t": 9.5, "problema": "falla"},
+                 {"origen": "medicion", "gravedad": "alta", "t": 1.0, "problema": "medido"},
+                 {"origen": "claude", "gravedad": "media", "t": 1.0, "problema": "opinión"}]
+        original = review.ask_claude
+        review.ask_claude = fake_claude
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp)
+                subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=s=128x128:r=24:d=10",
+                                "-pix_fmt", "yuv420p", str(out / "final.mp4")], check=True)
+                result = asyncio.run(review.verify_serious(out, items, 10.0))
+        finally:
+            review.ask_claude = original
+        self.assertEqual([r["gravedad"] for r in result], ["baja", "alta", "alta", "alta", "media"])
+        self.assertEqual(result[2]["verificacion"]["veredicto"], "sin verificar")
+        self.assertNotIn("verificacion", result[3])  # lo medido no se discute
+        self.assertNotIn("verificacion", result[4])
 
     def test_cover_verdict(self):
         good = {"texto": "¿Tu panza ruge en pleno SILENCIO?", "texto_se_lee": True, "sujeto_nitido": True, "subtitulos_encima": False}

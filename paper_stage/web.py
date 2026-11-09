@@ -24,7 +24,7 @@ from . import core, library
 from .jobs import TERMINAL, JobManager
 from .publishing import TEST_SLUG, PublishError, PublishRequest, Publisher, default_text, text_units
 from .radar import Radar, RadarError
-from .review import review_video
+from .review import review_video, set_discarded
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -485,6 +485,15 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             return _error(str(exc), 409)
         return JSONResponse({"ok": True})
 
+    async def discard_suggestion(request: Request):
+        try:
+            payload = await _json(request)
+            out_dir = library.slug_dir(request.path_params["slug"])
+            await asyncio.to_thread(set_discarded, out_dir, request.path_params["suggestion"], bool(payload.get("descartada", True)))
+        except ValueError as exc:
+            return _error(str(exc), 404)
+        return JSONResponse({"ok": True})
+
     async def video_corrections(request: Request):
         try:
             payload = await _json(request)
@@ -558,6 +567,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Route("/api/videos/{slug}", delete_video, methods=["DELETE"]),
         Route("/api/videos/{slug}/review", video_review, methods=["POST"]),
         Route("/api/videos/{slug}/corrections", video_corrections, methods=["POST"]),
+        Route("/api/videos/{slug}/review/{suggestion}/discard", discard_suggestion, methods=["POST"]),
         Route("/api/videos/{slug}/publish", video_publish, methods=["GET", "POST"]),
         Route("/api/videos/{slug}/publish/manual", video_mark_published, methods=["POST"]),
         Route("/api/videos/{slug}/publish/{pub_id:int}", video_mark_published, methods=["DELETE"]),

@@ -435,6 +435,8 @@ async def review_demo(out_dir: Path, serie: dict | None = None) -> dict:
              "correccion": "Regenera esa frase del TTS sin recortar el inicio de la palabra."},
             {"origen": "claude", "gravedad": "media", "t": 9.0, "tipo": "imagen", "problema": "La esponja parece un queso.",
              "correccion": "Dibuja la esponja con poros irregulares y color uniforme."},
+            {"origen": "claude", "gravedad": "baja", "t": 20.0, "tipo": "texto", "problema": "Falta el llamado a la acción en el cierre.",
+             "correccion": "Añádelo.", "verificacion": {"veredicto": "falso", "motivo": "A los 58 s se lee entero."}},
         ],
     })
 

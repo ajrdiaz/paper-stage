@@ -24,6 +24,9 @@ FILE = "revision.json"
 FRAMES_DIR = "revision"
 FRAME_EVERY = 3  # segundos entre fotogramas: bastante para ver cada escena sin gastar de más
 CLOSING_SECONDS = 6  # el final se mira segundo a segundo
+VERIFY_WINDOW = 3  # segundos a cada lado de un aviso grave al volver a mirarlo
+MAX_VERIFY = 6
+VERDICT_SEVERITY = {"confirmado": "alta", "menor": "media", "falso": "baja"}
 MAX_SUGGESTIONS = 12
 COVER_MIN_S, COVER_MAX_S = 0.5, 2.5  # debe coincidir con frame_portada_s en §11 del prompt: el gancho, ya completo
 COVER_THUMB_WIDTH = 270  # lo que mide una portada en la cuadrícula de un perfil, aproximadamente
@@ -322,6 +325,85 @@ async def validate_cover(out_dir: Path) -> dict:
     return cover_verdict(publish, gancho, raw)
 
 
+VERIFY_PROMPT = """Otro revisor miró pocos fotogramas de este video y marcó un problema como grave. A veces se equivoca: comprueba si tiene razón, sin inclinarte a darle la razón.
+
+Lo que afirma, sobre el segundo {t}: {problema}
+
+Tienes un fotograma por segundo alrededor de ese momento: {segundos}. Narración completa, para tener contexto: {narracion}
+
+Si afirma que algo falta o que dos cosas coinciden, compruébalo en estos fotogramas. La palabra de color en los subtítulos es la que se está pronunciando, no un énfasis mal puesto.
+
+Responde solo con JSON, sin texto alrededor:
+{{"veredicto": "confirmado, menor o falso", "motivo": "una frase con lo que se ve"}}
+
+«confirmado»: se ve con claridad, un espectador lo notaría y justifica volver a renderizar. Una figura que atraviesa a otra o a sí misma, unas manos fundidas, piezas sueltas o un texto repetido siempre son «confirmado», aunque parezcan parte de la escena: no los justifiques. «menor»: es cierto, pero no justifica rehacer el video. «falso»: lo que afirma no se ve en estos fotogramas; si se ve aunque sea en parte, no es falso."""
+
+
+def apply_verdict(item: dict, raw: dict | None) -> dict:
+    """Solo sigue siendo grave lo que se confirma; sin segunda mirada, sigue grave y se dice."""
+    verdict = str((raw or {}).get("veredicto") or "").strip().lower()
+    if verdict not in VERDICT_SEVERITY:
+        return {**item, "verificacion": {"veredicto": "sin verificar", "motivo": ""}}
+    return {**item, "gravedad": VERDICT_SEVERITY[verdict],
+            "verificacion": {"veredicto": verdict, "motivo": str(raw.get("motivo") or "").strip()[:300]}}
+
+
+def _frames_around(video: Path, out_dir: Path, prefix: str, t: float, duration: float) -> list[tuple[float, Path]]:
+    found = []
+    for k in range(-VERIFY_WINDOW, VERIFY_WINDOW + 1):
+        when = t + k
+        if when < 0 or (duration and when >= duration):
+            continue
+        target = out_dir / f"{prefix}{k + VERIFY_WINDOW}.jpg"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", str(when), "-i", str(video), "-frames:v", "1",
+                        "-vf", "scale=540:-2", "-q:v", "4", str(target)], capture_output=True, timeout=60)
+        if target.exists():
+            found.append((when, target))
+    return found
+
+
+async def verify_serious(out_dir: Path, suggestions: list[dict], duration: float) -> list[dict]:
+    """Vuelve a mirar cada aviso grave de Claude en los fotogramas de ese momento: con uno cada
+    FRAME_EVERY segundos inventa problemas, y cada corrección cuesta. Lo medido no se discute."""
+    frames_dir = out_dir / FRAMES_DIR
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    for old in frames_dir.glob("v*.jpg"):
+        old.unlink()
+    script = library.read_json(out_dir / "script.json")
+    narration = " ".join(str(e.get("vo") or "") for e in (script.get("escenas") or []) if isinstance(e, dict)) if isinstance(script, dict) else ""
+
+    async def check(index: int, item: dict) -> dict:
+        try:
+            frames = await asyncio.to_thread(_frames_around, out_dir / "final.mp4", frames_dir, f"v{index}_", float(item.get("t") or 0), duration)
+            prompt = VERIFY_PROMPT.format(t=item.get("t"), problema=item["problema"], narracion=narration or "(sin guion)",
+                                          segundos=", ".join(f"{when:g}" for when, _ in frames))
+            text, _ = await ask_claude([*_image_blocks([path for _, path in frames]), {"type": "text", "text": prompt}])
+            raw = _extract_json(text, "{")
+            return apply_verdict(item, raw if isinstance(raw, dict) else None)
+        except Exception:  # noqa: BLE001 — un fallo aquí no quita el aviso: queda sin verificar
+            return apply_verdict(item, None)
+
+    serious = [i for i, s in enumerate(suggestions) if s.get("gravedad") == "alta" and s.get("origen") == "claude"][:MAX_VERIFY]
+    checked = await asyncio.gather(*(check(i, suggestions[i]) for i in serious))
+    result = list(suggestions)
+    for i, item in zip(serious, checked):
+        result[i] = item
+    return result
+
+
+def set_discarded(out_dir: Path, suggestion_id: str, discarded: bool) -> dict:
+    """Descarta un aviso: deja de contar como corrección pendiente. Vale hasta la próxima revisión,
+    que genera avisos nuevos."""
+    path = out_dir / FILE
+    data = library.read_json(path)
+    item = next((s for s in data.get("sugerencias", []) if s.get("id") == suggestion_id), None) if isinstance(data, dict) else None
+    if item is None:
+        raise ValueError("Esa sugerencia ya no existe.")
+    item["descartada"] = bool(discarded)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    return data
+
+
 def save(out_dir: Path, data: dict) -> dict:
     """Numera las sugerencias, las ordena por gravedad y las guarda."""
     order = {s: i for i, s in enumerate(SEVERITIES)}
@@ -360,7 +442,7 @@ async def review_video(out_dir: Path, serie: dict | None = None) -> dict:
     try:
         visual = await visual_review(out_dir, frames, measures, serie)
         data.update(resumen=str(visual.get("resumen") or "")[:600], puntaje_visual=visual.get("puntaje_visual"))
-        suggestions += clean_suggestions(visual.get("sugerencias"))
+        suggestions += await verify_serious(out_dir, clean_suggestions(visual.get("sugerencias")), float(data.get("duracion") or 0))
     except Exception as exc:  # noqa: BLE001 — sin Claude, siguen valiendo las medidas
         data["error_vision"] = f"No se pudo revisar la imagen: {exc}"[:300]
     return save(out_dir, {**data, "sugerencias": suggestions})
