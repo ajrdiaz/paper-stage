@@ -328,7 +328,7 @@ async def visual_review(out_dir: Path, frames: list[dict], measures: dict, reque
 
 COVER_PROMPT = """Valida la portada de un video de TikTok para adultos. Es el fotograma exacto que verá la gente. La primera imagen es esa portada a {ancho} px de ancho, como se ve en la cuadrícula de un perfil; la segunda, a tamaño completo.
 
-Juzga la primera, la pequeña: si algo solo se aprecia en la grande, no cuenta. Sé estricto: la portada decide si alguien abre el video.
+Juzga la primera, la pequeña: si algo solo se aprecia en la grande, no cuenta. Sé estricto: la portada decide si alguien abre el video. El título va en la franja superior, encima del sujeto en acción: eso es lo buscado, no un fallo, siempre que se lea.
 
 Responde solo con JSON, sin texto alrededor:
 {{"texto": "las palabras que puedes leer sin esfuerzo en la miniatura, tal cual; vacío si no lees ninguna",
