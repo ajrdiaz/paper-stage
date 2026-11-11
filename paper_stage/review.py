@@ -44,16 +44,86 @@ def _plain(word: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text)
 
 
-NUMBER_WORDS = {"cero": "0", "un": "1", "uno": "1", "una": "1", "dos": "2", "tres": "3", "cuatro": "4", "cinco": "5", "seis": "6", "siete": "7",
-                "ocho": "8", "nueve": "9", "diez": "10", "once": "11", "doce": "12", "quince": "15", "veinte": "20", "treinta": "30",
-                "cuarenta": "40", "cincuenta": "50", "sesenta": "60", "setenta": "70", "ochenta": "80", "noventa": "90", "cien": "100", "mil": "1000"}
+# Números dichos con palabras, en español e inglés. Whisper los escribe con cifras («doce mil» → «12 000»),
+# así que guion y transcripción se pasan a cifras antes de compararlos.
+NUMBERS = {
+    "cero": 0, "un": 1, "uno": 1, "una": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7, "ocho": 8,
+    "nueve": 9, "diez": 10, "once": 11, "doce": 12, "trece": 13, "catorce": 14, "quince": 15, "dieciseis": 16,
+    "diecisiete": 17, "dieciocho": 18, "diecinueve": 19, "veinte": 20, "veintiun": 21, "veintiuno": 21, "veintiuna": 21,
+    "veintidos": 22, "veintitres": 23, "veinticuatro": 24, "veinticinco": 25, "veintiseis": 26, "veintisiete": 27,
+    "veintiocho": 28, "veintinueve": 29, "treinta": 30, "cuarenta": 40, "cincuenta": 50, "sesenta": 60, "setenta": 70,
+    "ochenta": 80, "noventa": 90, "cien": 100, "ciento": 100, "doscientos": 200, "doscientas": 200, "trescientos": 300,
+    "trescientas": 300, "cuatrocientos": 400, "cuatrocientas": 400, "quinientos": 500, "quinientas": 500,
+    "seiscientos": 600, "seiscientas": 600, "setecientos": 700, "setecientas": 700, "ochocientos": 800,
+    "ochocientas": 800, "novecientos": 900, "novecientas": 900,
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70,
+    "eighty": 80, "ninety": 90,
+}
+SCALES = {"mil": 1000, "thousand": 1000, "millon": 1_000_000, "millones": 1_000_000, "million": 1_000_000}
+NUMBER_LINKS = {"y", "and"}  # «cincuenta y seis», «one hundred and two»
+
+
+def _fits(current: int, value: int) -> bool:
+    """«doscientos cincuenta» es un número; «cinco tres», dos: cada palabra cabe en el hueco que deja la anterior."""
+    if not current:
+        return True
+    place = 1
+    while current % (place * 10) == 0:
+        place *= 10
+    return value < place
+
+
+def _as_numbers(words: list[str]) -> list[tuple[str, int]]:
+    """Palabras ya sin signos → (palabra, índice de la primera palabra), con cada número como una sola cifra.
+    «doce mil» y «12 000» quedan igual («12000»), y «cincuenta y seis», como «56»."""
+    out: list[tuple[str, int]] = []
+    i = 0
+    while i < len(words):
+        word = words[i]
+        if word.isdigit():
+            # Whisper separa los miles: «12 000» o «1 500 000».
+            j, digits = i + 1, word
+            while j < len(words) and len(words[j]) == 3 and words[j].isdigit() and len(word) <= 3:
+                digits += words[j]
+                j += 1
+            out.append((str(int(digits)), i))
+            i = j
+            continue
+        if word not in NUMBERS and word not in SCALES and word != "hundred":
+            out.append((word, i))
+            i += 1
+            continue
+        total = current = 0
+        j, used = i, False
+        while j < len(words):
+            w = words[j]
+            if w in NUMBERS and _fits(current, NUMBERS[w]):
+                current += NUMBERS[w]
+            elif w == "hundred" and current and current < 10:
+                current *= 100
+            elif w in SCALES and (current or not used):
+                total += (current or 1) * SCALES[w]
+                current = 0
+            elif w in NUMBER_LINKS and used and j + 1 < len(words) and _fits(current, NUMBERS.get(words[j + 1], 10**9)):
+                pass
+            else:
+                break
+            used = True
+            j += 1
+        if j == i:  # «hundred» suelto no es un número
+            out.append((word, i))
+            j += 1
+        else:
+            out.append((str(total + current), i))
+        i = j
+    return out
 
 
 def _same_sound(said: str, heard: str) -> bool:
-    """«cinco» y «5» o «ruge en» y «rujen» se oyen igual: Whisper escribe números y junta vocales."""
+    """«ruge en» y «rujen» se oyen igual: Whisper junta vocales y duda entre ge y je."""
     a, b = said.replace(" ", ""), heard.replace(" ", "")
-    if NUMBER_WORDS.get(said, said) == NUMBER_WORDS.get(heard, heard):
-        return True
     # ge/je suenan igual, y una vocal doble se une al hablar.
     a, b = (re.sub(r"(.)\1+", r"\1", x.replace("ge", "je").replace("gi", "ji")) for x in (a, b))
     return bool(a) and a == b
@@ -62,18 +132,26 @@ def _same_sound(said: str, heard: str) -> bool:
 def compare_speech(expected: str, heard: list[dict]) -> list[dict]:
     """Palabras del guion que Whisper no oyó igual, con su segundo. Es la mejor señal de una palabra
     mal pronunciada o cortada, aunque Whisper también se equivoca: es para revisarla, no una sentencia."""
-    mine = [w for w in (_plain(x) for x in expected.split()) if w]
+    mine = [w for w, _ in _as_numbers([w for w in (_plain(x) for x in re.split(r"[\s\-–—]+", expected)) if w])]
     theirs = [w for w in heard if _plain(w["word"])]
-    keys = [_plain(w["word"]) for w in theirs]
+    numbered = _as_numbers([_plain(w["word"]) for w in theirs])
+    keys = [w for w, _ in numbered]
+    starts = [theirs[k]["start"] for _, k in numbered]
     differences = []
     for op, a0, a1, b0, b1 in difflib.SequenceMatcher(None, mine, keys, autojunk=False).get_opcodes():
         if op == "equal":
             continue
         if _same_sound(" ".join(mine[a0:a1]), " ".join(keys[b0:b1])):
             continue
-        at = theirs[min(b0, len(theirs) - 1)]["start"] if theirs else 0.0
+        at = starts[min(b0, len(starts) - 1)] if starts else 0.0
         differences.append({"t": round(float(at), 1), "esperado": " ".join(mine[a0:a1]), "oido": " ".join(keys[b0:b1])})
     return differences
+
+
+def spoken_text(script: dict | None) -> str:
+    """Lo que de verdad leyó la voz: «tts» de cada escena (números y siglas con letra), o «vo» si no hay."""
+    scenes = script.get("escenas") if isinstance(script, dict) else None
+    return " ".join(str(s.get("tts") or s.get("vo") or "") for s in scenes or [] if isinstance(s, dict))
 
 
 def _run_ffmpeg(*args: str) -> str:
@@ -199,7 +277,7 @@ Busca:
 Reglas: solo problemas reales que veas, no gustos. Solo ves un fotograma cada {cada} segundos: no afirmes que falta un texto o una imagen porque no salga en ellos, puede estar entre dos. La palabra de color en los subtítulos es la que se está pronunciando, no un énfasis mal puesto. Las figuras pequeñas con media pantalla vacía sí son un problema. Como mucho {maximo}, de más a menos importante. «correccion» es una instrucción directa y concreta para quien lo va a arreglar en stage.html.
 
 Responde solo con JSON, sin texto alrededor:
-{{"resumen": "2 frases: qué tal está y qué es lo más urgente",
+{{"resumen": "2 frases con la impresión general del video, sin nombrar problemas concretos: esos van en sugerencias",
   "puntaje_visual": 7,
   "sugerencias": [{{"gravedad": "alta, media o baja", "t": 12, "tipo": "imagen, texto, comprension, ritmo o calidad", "problema": "...", "correccion": "..."}}]}}"""
 
@@ -424,7 +502,7 @@ async def review_video(out_dir: Path, serie: dict | None = None) -> dict:
     voice = out_dir / "voice.wav"
     words = await asyncio.to_thread(transcribe_words, voice if voice.exists() else video)
     script = library.read_json(out_dir / "script.json")
-    expected = " ".join(str(s.get("vo") or "") for s in (script or {}).get("escenas", []) if isinstance(s, dict)) if isinstance(script, dict) else ""
+    expected = spoken_text(script)
     audio = await asyncio.to_thread(measure_audio, video, voice)
     filters = await asyncio.to_thread(measure_video, video)
     frames = await asyncio.to_thread(extract_frames, video, out_dir / FRAMES_DIR)
@@ -442,7 +520,12 @@ async def review_video(out_dir: Path, serie: dict | None = None) -> dict:
     try:
         visual = await visual_review(out_dir, frames, measures, serie)
         data.update(resumen=str(visual.get("resumen") or "")[:600], puntaje_visual=visual.get("puntaje_visual"))
-        suggestions += await verify_serious(out_dir, clean_suggestions(visual.get("sugerencias")), float(data.get("duracion") or 0))
+        checked = await verify_serious(out_dir, clean_suggestions(visual.get("sugerencias")), float(data.get("duracion") or 0))
+        suggestions += checked
+        # El resumen se escribió antes de volver a mirar los avisos graves: si alguno no se confirmó, se dice.
+        dropped = sum(1 for s in checked if s.get("verificacion", {}).get("veredicto") in ("menor", "falso"))
+        if dropped and data["resumen"]:
+            data["resumen"] += f" ({dropped} aviso{'s' if dropped > 1 else ''} grave{'s' if dropped > 1 else ''} no se confirmó al volver a mirarlo{'s' if dropped > 1 else ''}.)"
     except Exception as exc:  # noqa: BLE001 — sin Claude, siguen valiendo las medidas
         data["error_vision"] = f"No se pudo revisar la imagen: {exc}"[:300]
     return save(out_dir, {**data, "sugerencias": suggestions})

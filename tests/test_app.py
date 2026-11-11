@@ -791,6 +791,22 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(review.compare_speech("de cinco a treinta veces, a quien le ruge en cada junta",
                                                self.heard("de 5 a 30 veces a quien le rujen cada junta")), [])
         self.assertEqual(review.compare_speech("sobra piel", self.heard("sobre piel"))[0]["esperado"], "sobra")  # esto sí es distinto
+        # Falsos avisos graves del video de la melaza: números de varias palabras y miles separados.
+        self.assertEqual(review.compare_speech("eran doce mil toneladas en mil novecientos diecinueve, a cincuenta y seis por hora",
+                                               self.heard("eran 12 .000 toneladas en 1919. a 56 por hora")), [])
+        self.assertEqual(review.compare_speech("murieron veintiún personas", self.heard("murieron 21 personas")), [])
+        self.assertEqual(review.compare_speech("one hundred and two", self.heard("102")), [])
+        # Un número cambiado sigue siendo un aviso, y la «y» entre dos números sueltos no se pierde.
+        self.assertEqual(review.compare_speech("doce mil", self.heard("12 .500"))[0]["esperado"], "12000")
+        self.assertEqual(review.compare_speech("dos y tres", self.heard("2 y 3")), [])
+        self.assertEqual(review.compare_speech("a hundred", self.heard("a hundred")), [])
+
+    def test_speech_is_compared_with_what_the_voice_read(self):
+        # «vo» se escribe para leerse («56 km/h»); «tts» es lo que leyó la voz («kilómetros por hora»).
+        script = {"escenas": [{"vo": "a 56 km/h", "tts": "a cincuenta y seis kilómetros por hora"}, {"vo": "Fin."}]}
+        self.assertEqual(review.spoken_text(script), "a cincuenta y seis kilómetros por hora Fin.")
+        self.assertEqual(review.compare_speech(review.spoken_text(script), self.heard("a 56 kilometros por hora fin")), [])
+        self.assertEqual(review.spoken_text(None), "")
 
     def test_measures_become_suggestions(self):
         found = review.measured_suggestions({
