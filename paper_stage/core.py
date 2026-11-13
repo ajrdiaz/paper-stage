@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import sys
 import unicodedata
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
@@ -55,7 +56,30 @@ def chatterbox_ready() -> bool:
     return VOICE_PYTHON.exists()
 
 
+ELEVEN_VOICE_RE = re.compile(r"^[A-Za-z0-9]{8,40}$")
+
+
+def elevenlabs_ready() -> bool:
+    """Hay clave de ElevenLabs (variable o guardada en Sistema). No la lee: solo mira que exista."""
+    if os.environ.get("PAPER_STAGE_ELEVENLABS_KEY"):
+        return True
+    db = DATA_DIR / "paper_stage.db"
+    if not db.exists():
+        return False
+    try:
+        with contextlib.closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'elevenlabs_key'").fetchone()
+    except sqlite3.Error:
+        return False
+    return bool(row and row[0])
+
+
 VOZ_CHATTERBOX = """**Voz de la serie: Chatterbox**, con el script de la app, que ya trae la voz y los ajustes de la serie. Escribe `output/{{SLUG}}/audio/lista_voz.json`: `[{"texto": "…", "salida": "output/{{SLUG}}/audio/raw_01.wav"}, …]`, una entrada por escena con todo su texto (320 caracteres como máximo), y ejecútalo una vez, en primer plano y desde la raíz: `.venv-voz/bin/python scripts/voz.py output/{{SLUG}}/audio/lista_voz.json --idioma {{IDIOMA}}`. Tarda unas 12 veces la duración del audio. No uses el `tts.py` de videos anteriores ni otra voz. No hay ajuste de velocidad: si el total queda fuera de la duración, reescribe líneas (con `atempo` puedes ajustar como mucho a 1.08). Solo si el script falla de verdad, usa Kokoro `{{VOZ}}` (lang_code `{{LANG_CODE}}`) y anótalo en `qa.md`."""
+# La voz elegida de oído para la serie. Gasta créditos del plan del usuario: se genera una vez por escena.
+VOZ_ELEVENLABS = """**Voz de la serie: ElevenLabs**, la voz `{{VOZ_ELEVENLABS}}` elegida de oído por el usuario, con el script de la app, que ya trae la clave y los ajustes. Escribe `output/{{SLUG}}/audio/lista_voz.json`: `[{"texto": "…", "salida": "output/{{SLUG}}/audio/raw_01.wav"}, …]`, una entrada por escena con todo su texto, y ejecútalo una vez, en primer plano y desde la raíz: `.venv/bin/python scripts/voz_elevenlabs.py output/{{SLUG}}/audio/lista_voz.json --voz {{VOZ_ELEVENLABS}}`. Tarda unos segundos por escena, pero **cada generación gasta créditos del plan del usuario** (1 por carácter): nunca regeneres para probar; en las rondas del §6 pasa una lista solo con las escenas que fallaron. No escribas etiquetas entre corchetes ni indicaciones de tono en el texto: se leerían. Junto a cada WAV deja `raw_NN.words.json`, con el inicio y el fin de cada palabra en ese WAV: úsalos para `words.json` (§5, paso 6) sumando el momento en que empieza cada escena en `timeline.json`, en vez de transcribir. Si recortas el silencio inicial de un WAV, resta lo recortado; si le aplicas `atempo`, divide los tiempos por el factor; si haces algo más, vuelve a faster-whisper. No hay ajuste de velocidad: si el total queda fuera de la duración, reescribe líneas (con `atempo` puedes ajustar como mucho a 1.08). No uses otra voz ni el `tts.py` de videos anteriores. Solo si el script falla de verdad (sin créditos, sin conexión o la clave rechazada), {{VOZ_RESPALDO}} y anótalo en `qa.md`."""
+VOZ_RESPALDO_CHATTERBOX = ("genera la misma lista con Chatterbox (`.venv-voz/bin/python scripts/voz.py output/{{SLUG}}/audio/lista_voz.json "
+                           "--idioma {{IDIOMA}}`, unas 12 veces la duración del audio) y saca `words.json` con faster-whisper")
+VOZ_RESPALDO_KOKORO = "usa Kokoro `{{VOZ}}` (lang_code `{{LANG_CODE}}`) y saca `words.json` con faster-whisper"
 VOZ_KOKORO = """**Voz de la serie:** Kokoro `{{VOZ}}` (lang_code `{{LANG_CODE}}`). Si tienes que usar Piper y su voz no coincide (femenina o masculina), elige otra voz de Piper del mismo idioma que sí coincida."""
 _REMATE = ("Una frase memorable que vuelve a la imagen del inicio, para que el loop se sienta continuo, y una invitación a enviarlo a "
            'una persona concreta que lo vive ("mándaselo a quien…"). Cierra con el CTA exacto, sin cambiarle una palabra: "{{CTA}}"')
@@ -194,6 +218,7 @@ class Serie:
     voces: dict = field(default_factory=lambda: dict(DEFAULT_VOICES["femenina"]))
     voz_estilo: str = ""
     cta: dict = field(default_factory=dict)  # frase final por idioma
+    voz_elevenlabs: str = ""  # ID de la voz de ElevenLabs para sus videos en español; vacío: Chatterbox
     id: str = ""
 
     @classmethod
@@ -224,6 +249,9 @@ class Serie:
             if voces.get(lang) not in VOICES[lang]:
                 raise ValueError(f"Voz no válida para {LANGUAGE_NAMES[lang]}: {voces.get(lang)}")
         self.voces = {lang: voces[lang] for lang in LANGUAGES}
+        self.voz_elevenlabs = str(self.voz_elevenlabs or "").strip()
+        if self.voz_elevenlabs and not ELEVEN_VOICE_RE.match(self.voz_elevenlabs):
+            raise ValueError("Voz de ElevenLabs no válida.")
         cta = self.cta if isinstance(self.cta, dict) else {}
         self.cta = {lang: _clean(cta.get(lang)) for lang in LANGUAGES if _clean(cta.get(lang))}
         if any(len(c) > 80 for c in self.cta.values()):
@@ -330,7 +358,9 @@ class VideoRequest:
         length = DURATIONS[self.duracion]
         return {
             "ESTRUCTURA": length["estructura"],  # primero: trae dentro otras variables
-            "VOZ_MOTOR": VOZ_CHATTERBOX if chatterbox_ready() and self.idioma == "es" else VOZ_KOKORO,
+            "VOZ_MOTOR": self._voice_engine(ficha),
+            "VOZ_RESPALDO": VOZ_RESPALDO_CHATTERBOX if chatterbox_ready() else VOZ_RESPALDO_KOKORO,
+            "VOZ_ELEVENLABS": ficha.voz_elevenlabs or "(ninguna)",
             "DURACION": self.duracion,
             "DUR_MIN": str(length["min"]),
             "DUR_MAX": str(length["max"]),
@@ -358,6 +388,12 @@ class VideoRequest:
             "REFERENCIAS": self._references_text(ficha),
             "GANCHOS_PREVIOS": "\n".join(f"- {g}" for g in self.ganchos_previos) or "- (ninguno todavía)",
         }
+
+    def _voice_engine(self, ficha: Serie) -> str:
+        # ElevenLabs solo en español, con voz elegida y clave guardada; si no, la local de siempre.
+        if self.idioma == "es" and ficha.voz_elevenlabs and elevenlabs_ready():
+            return VOZ_ELEVENLABS
+        return VOZ_CHATTERBOX if chatterbox_ready() and self.idioma == "es" else VOZ_KOKORO
 
     def _references_text(self, ficha: Serie) -> str:
         if self.referencias:

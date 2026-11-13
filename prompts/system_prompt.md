@@ -29,7 +29,7 @@ Todo lo visible y audible va en `{{IDIOMA}}`. Si generas la versión `en` de un 
 3. **Guion** → `script.json` (§5), a partir de `bible.md`, con {{N_ESCENAS}} escenas y una línea de narración por escena.
 4. **Voz** (§6): una WAV por escena en `audio/scene_XX.wav`. Mide cada una con `ffprobe` y compruébala: no puedes oírla, así que transcríbela (§6).
 5. **Ajuste de tiempos** → `timeline.json`: las duraciones reales del audio (más 0.2–0.5 s de respiro visual) definen cada escena. Si el total queda fuera de {{DUR_MIN}}–{{DUR_MAX}} s, reescribe líneas (no aceleres por encima de 1.12×) y repite el paso 4. **Nunca** dejes que una línea se pase del tiempo de su escena.
-6. **Datos de sincronía**: une las WAV de las escenas en `voice.wav`, cada una en su tiempo de `timeline.json` (la app mide ahí cuándo empieza la voz). Después, `faster-whisper` (modelo `small`, local) → `words.json` para los subtítulos; envolvente de amplitud de la voz a 24 fps → `mouth.json` (0 = silencio, 1 = voz fuerte), que puede mover la boca de un presentador o pulsar los elementos en pantalla.
+6. **Datos de sincronía**: une las WAV de las escenas en `voice.wav`, cada una en su tiempo de `timeline.json` (la app mide ahí cuándo empieza la voz). Después, `faster-whisper` (modelo `small`, local) → `words.json` para los subtítulos (si el §0 dice que el motor de voz da los tiempos de cada palabra, úsalos en su lugar); envolvente de amplitud de la voz a 24 fps → `mouth.json` (0 = silencio, 1 = voz fuerte), que puede mover la boca de un presentador o pulsar los elementos en pantalla.
 7. **Animación**: una sola página `stage.html` autocontenida (HTML + SVG/Canvas + JS, sin CDNs) con un reloj determinista (§7).
 8. **Audio**: música y efectos generados por código (§8) → `music.wav` y `sfx.wav`. Mezcla final → `mix.wav` (−14 LUFS).
 9. **QA previo** (§10) → `qa_previo.md`: todo lo que se puede comprobar sin el video final. Corrige lo que falle **antes** de renderizar: un error aquí cuesta minutos; después del render, un render entero.
@@ -125,13 +125,13 @@ Todo el video es un solo movimiento de cámara continuo: entra en un objeto y sa
 }
 ```
 
-## 6. Voz (TTS local, costo cero)
+## 6. Voz
 
 - El motor es el que indica el §0. **Fallback: Kokoro-82M**, ya instalado.
 - **La voz debe sonar fluida: genera cada escena de una sola vez**, con todo su texto, para que el TTS enlace las frases con su entonación natural. Nunca sintetices frase por frase ni pegues frases con pausas añadidas: suena entrecortado. Las pausas salen de la puntuación. No recortes dentro de la escena: en sus extremos, solo el silencio real con un umbral muy bajo, porque recortar se come vocales iniciales ("Etiqueta" sonó "Tiqueta"). Añade 80–150 ms al final de cada escena.
 - **Cuenta las palabras antes de generar la voz**, con el texto que va al TTS en `output/{{SLUG}}/audio/lista_voz.json` (con Kokoro, escribe la misma lista): `.venv/bin/python scripts/revisar_voz.py output/{{SLUG}}/audio/lista_voz.json --max-palabras <máximo de la tabla del §0> --solo-contar`. Si sobran, acorta ahora: regenerar la voz por una palabra de más cuesta minutos.
 - **No puedes oír el audio: compruébalo transcribiendo.** Después de generarla, `.venv/bin/python scripts/revisar_voz.py output/{{SLUG}}/audio/lista_voz.json` transcribe cada WAV con `faster-whisper` y la compara con su texto igual que la revisión de la app (entiende números y guiones). Si una escena no coincide, se pronuncia mal o se corta: cambia su grafía solo en el texto que va al TTS o reordena la frase, y regenera **solo esas escenas, todas en una misma ejecución**.
-- **Dos rondas de regeneración como máximo.** Cada escena tarda unos 2 minutos, y Whisper también se equivoca: junta vocales de palabras vecinas o escribe en inglés palabras como «exprés». Si tras dos rondas queda alguna diferencia, quédate con la toma más fiel, anótala en `qa.md` con su segundo y sigue: la revisión de la app la vuelve a marcar y el usuario la escucha.
+- **Dos rondas de regeneración como máximo.** Con Chatterbox cada escena tarda unos 2 minutos; con ElevenLabs cada una gasta créditos. Whisper también se equivoca: junta vocales de palabras vecinas o escribe en inglés palabras como «exprés». Si tras dos rondas queda alguna diferencia, quédate con la toma más fiel, anótala en `qa.md` con su segundo y sigue: la revisión de la app la vuelve a marcar y el usuario la escucha.
 - Si hace falta ajustar el tono: `rubberband=pitch=…` (fallback: `asetrate` + `atempo`). No pases de 1.05 ni bajes de 0.95.
 - Escribe cifras y siglas como se dicen ("mil novecientos setenta y cuatro"), y los nombres propios extranjeros con la ortografía que el TTS pronuncia bien (solo en el texto que va al TTS; en los subtítulos, la ortografía correcta).
 

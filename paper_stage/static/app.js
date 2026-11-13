@@ -1144,6 +1144,11 @@ function serieForm(c, isNew) {
       <div class="field"><label for="voz-es">Voz en español</label>${voiceSelect("es")}</div>
       <div class="field"><label for="voz-en">Voz en inglés</label>${voiceSelect("en")}</div>
     </div>
+    <div class="field"><label for="c-voz-eleven">Voz de ElevenLabs para los videos en español</label>
+      <select id="c-voz-eleven" name="voz_elevenlabs"><option value="">No: Chatterbox (local, gratis)</option>
+        ${c.voz_elevenlabs ? `<option value="${esc(c.voz_elevenlabs)}" selected>${esc(c.voz_elevenlabs)}</option>` : ""}</select>
+      <span class="hint" id="c-voz-eleven-hint">Gasta créditos de tu plan (unos 700 por video). Si ElevenLabs falla, se usa Chatterbox.
+        Elígela después de escuchar sus muestras en <a href="#/sistema">Sistema</a>.</span></div>
     <div class="field"><label for="c-voz-estilo">Cómo suena</label>
       <input id="c-voz-estilo" name="voz_estilo" type="text" maxlength="200" autocomplete="off" value="${esc(c.voz_estilo || "")}" placeholder="Ej.: narradora adulta, cercana y segura"></div>
     <div class="field"><label for="c-canal">Cuenta de TikTok</label>
@@ -1198,6 +1203,21 @@ async function renderSerieEditor(id, params) {
       + (lost ? `<option value="${esc(current)}" selected>${esc(canal.selectedOptions[0].textContent)} (ya no está en Buffer)</option>` : "")
       + channels.map(ch => `<option value="${esc(ch.id)}" ${ch.id === current ? "selected" : ""}>${esc(ch.nombre)}</option>`).join("");
   })().catch(err => { $("#c-canal-hint").textContent = `No se pudieron cargar las cuentas de Buffer: ${err.message}`; });
+  // Las voces de ElevenLabs salen de la última comprobación de Sistema (no gasta créditos).
+  const eleven = $("#c-voz-eleven");
+  (async () => {
+    const cfg = await api("/api/voz/elevenlabs");
+    const voices = cfg.check?.voices || [];
+    if (!cfg.key || !voices.length) {
+      $("#c-voz-eleven-hint").innerHTML = `Para elegirla, guarda la clave de ElevenLabs y comprueba el acceso en <a href="#/sistema">Sistema</a>.`;
+      if (!eleven.value) eleven.disabled = true;
+      return;
+    }
+    const current = eleven.value, lost = current && !voices.some(v => v.id === current);
+    eleven.innerHTML = `<option value="">No: Chatterbox (local, gratis)</option>`
+      + (lost ? `<option value="${esc(current)}" selected>${esc(current)} (ya no está en tu cuenta)</option>` : "")
+      + voices.map(v => `<option value="${esc(v.id)}" ${v.id === current ? "selected" : ""}>${esc(v.name)}${v.accent ? ` · ${esc(v.accent)}` : ""}</option>`).join("");
+  })().catch(err => { $("#c-voz-eleven-hint").textContent = `No se pudieron cargar las voces de ElevenLabs: ${err.message}`; });
   const drawPalette = () => {
     $("#palette").innerHTML = palette.map((c, i) => `
       <span class="swatch-input"><input type="color" value="${esc(c.toLowerCase())}" data-i="${i}" aria-label="Color ${i + 1}">
@@ -1217,7 +1237,7 @@ async function renderSerieEditor(id, params) {
     const d = Object.fromEntries(new FormData(form).entries());
     const body = {
       nombre: d.nombre, nicho: d.nicho, idioma: d.idioma, estilo: d.estilo, tono: d.tono, presentador: d.presentador,
-      paleta: palette, voces: { es: d.voz_es, en: d.voz_en }, voz_estilo: d.voz_estilo,
+      paleta: palette, voces: { es: d.voz_es, en: d.voz_en }, voz_estilo: d.voz_estilo, voz_elevenlabs: d.voz_elevenlabs || "",
       cta: { es: d.cta_es, en: d.cta_en },
     };
     $("#char-save").disabled = true;

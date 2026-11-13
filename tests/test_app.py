@@ -148,6 +148,31 @@ class CoreTests(unittest.TestCase):
         finally:
             core.chatterbox_ready = original
 
+    def test_elevenlabs_voice_in_the_prompt(self):
+        originals = core.chatterbox_ready, core.elevenlabs_ready
+        core.chatterbox_ready = core.elevenlabs_ready = lambda: True
+        try:
+            serie = core.Serie.from_dict({**core.DEFAULT_SERIE.to_dict(), "voz_elevenlabs": "ay4iqk10DLwc8KGSrf2t"})
+            serie.validate()
+            req = core.VideoRequest(tema="El hipo", idioma="es", serie=serie.to_dict())
+            req.validate()
+            prompt = core.render_prompt(req.variables())
+            self.assertIn("scripts/voz_elevenlabs.py output/el-hipo-es/audio/lista_voz.json --voz ay4iqk10DLwc8KGSrf2t", prompt)
+            self.assertIn("scripts/voz.py output/el-hipo-es/audio/lista_voz.json --idioma es", prompt)  # el respaldo
+            self.assertNotIn("{{", prompt)
+            english = core.VideoRequest(tema="Hiccups", idioma="en", serie=serie.to_dict())
+            english.validate()
+            self.assertNotIn("voz_elevenlabs.py", core.render_prompt(english.variables()))
+            core.elevenlabs_ready = lambda: False  # sin clave, la voz local de siempre
+            self.assertNotIn("voz_elevenlabs.py", core.render_prompt(req.variables()))
+            core.chatterbox_ready = lambda: False
+            core.elevenlabs_ready = lambda: True
+            self.assertIn("usa Kokoro `ef_dora`", core.render_prompt(req.variables()))
+        finally:
+            core.chatterbox_ready, core.elevenlabs_ready = originals
+        with self.assertRaisesRegex(ValueError, "ElevenLabs"):
+            core.Serie.from_dict({**core.DEFAULT_SERIE.to_dict(), "voz_elevenlabs": "../x"}).validate()
+
     def test_duration_changes_the_prompt(self):
         for duracion, scenes, text, absent in (("corta", "5", "30.0 a 45.0 segundos", "61.0"), ("larga", "7", "61.0 a 70.0 segundos", "30.0 a")):
             with self.subTest(duracion=duracion):
@@ -1466,6 +1491,14 @@ class ElevenTests(unittest.TestCase):
         self.assertTrue(all(c[1].startswith("https://api.elevenlabs.io/") for c in calls))
         self.assertTrue(all(c[2]["xi-api-key"] == "sk_secreta_1234" for c in calls))
         self.assertTrue(all("Authorization" not in c[2] for c in calls))
+        original = core.DATA_DIR
+        try:
+            core.DATA_DIR = manager.data_dir  # la clave guardada habilita el motor sin leerla
+            self.assertTrue(core.elevenlabs_ready())
+            core.DATA_DIR = TMP / "sin-datos"
+            self.assertFalse(core.elevenlabs_ready())
+        finally:
+            core.DATA_DIR = original
 
         rejected = eleven.ElevenLabs(manager.store.db, manager.data_dir, http=lambda *a: (401, b"{}"))
         with self.assertRaisesRegex(eleven.ElevenError, "rechazó"):
