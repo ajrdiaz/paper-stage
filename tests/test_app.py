@@ -133,6 +133,32 @@ class CoreTests(unittest.TestCase):
         req.validate()
         self.assertIn("assets/modelos/cuerpo-torso.js", core.render_prompt(req.variables()))
 
+    def test_story_narrative_and_serie_notes(self):
+        base = core.DEFAULT_SERIE.to_dict()
+        plain = core.VideoRequest(tema="El hipo", idioma="es")
+        plain.validate()
+        prompt = core.render_prompt(plain.variables())
+        self.assertIn("**El mecanismo por dentro**", prompt)
+        self.assertIn("**Injusticia entre dos personas:**", prompt)
+        self.assertNotIn("Indicaciones propias de la serie", prompt)
+        for duracion, giro in (("corta", "| 4 |"), ("larga", "| 6 |")):
+            with self.subTest(duracion=duracion):
+                serie = core.Serie.from_dict({**base, "narrativa": "historia", "indicaciones": "Casos de México poco contados."})
+                serie.validate()
+                req = core.VideoRequest(tema="La guerra de los pasteles", idioma="es", serie=serie.to_dict(), duracion=duracion)
+                req.validate()
+                prompt = core.render_prompt(req.variables())
+                self.assertNotIn("{{", prompt)
+                self.assertIn(f"{giro} ", prompt.split("**El detalle que lo explica**")[0].splitlines()[-1] + " ")
+                self.assertIn("**Cifra imposible:**", prompt)
+                self.assertNotIn("**El mecanismo por dentro**", prompt)
+                self.assertNotIn("**Injusticia entre dos personas:**", prompt)
+                self.assertIn("Casos de México poco contados.", prompt)
+        with self.assertRaisesRegex(ValueError, "narración"):
+            core.Serie.from_dict({**base, "narrativa": "otra"}).validate()
+        with self.assertRaisesRegex(ValueError, "indicaciones"):
+            core.Serie.from_dict({**base, "indicaciones": "x" * 1501}).validate()
+
     def test_same_topic_with_other_words(self):
         for a, b, same in (
                 ("¿Por qué cuando cierras los ojos fuerte ves lucecitas y colores?", "Por qué ves lucecitas cuando cierras los ojos fuerte", True),

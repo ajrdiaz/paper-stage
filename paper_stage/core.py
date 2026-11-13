@@ -87,9 +87,19 @@ _GANCHO = ("Una frase de 3 s de voz como máximo, de uno de los tipos de abajo. 
            "gancho va también **escrito** en pantalla (`texto_gancho`, §7), porque muchos ven TikTok sin sonido. El espectador debe "
            "reconocerse: algo que le ha pasado a él o a alguien cercano.")
 # Fórmulas fijas como "lo más raro viene ahora" se repetían en todos los videos: cada tema promete lo suyo.
-_BUCLE = ("una promesa propia de este tema, que nombra la pieza que falta de la explicación sin revelarla. "
+_BUCLE = ("una promesa propia de este tema, que nombra la pieza que falta de la explicación o de la historia sin revelarla. "
           "Nada de fórmulas genéricas como \"lo más raro viene ahora\", ni la misma frase de los videos anteriores.")
 _GIRO = "Entra directo con el dato: sin anunciarlo con \"Lo raro:\" o \"Lo más raro:\"."
+# Historias reales: lo que mostró el Radar en las cuentas de sucesos con más vistas (cifras concretas en el gancho,
+# una sola crisis y un detalle que lo explica), condensado al formato corto.
+_GANCHO_HISTORIA = ("Una frase de 3 s de voz como máximo con el hecho más increíble y **sus cifras concretas** (año, distancia, tiempo, "
+                    "cuántas personas), de uno de los tipos de abajo. La voz empieza en ≤0.3 s, el momento ya está en acción desde el "
+                    "frame 1 y el gancho va también **escrito** en pantalla (`texto_gancho`, §7), porque muchos ven TikTok sin sonido. "
+                    "Debe sonar imposible y ser verdad.")
+_CONTEXTO_HISTORIA = ("El contexto mínimo para entenderlo: lugar, año y protagonistas, mostrados en la escena, y el problema o la "
+                      "pregunta que nadie podía responder.")
+_MOMENTO_CLAVE = ("Lo que pasó, contado con objetos y estructuras: la escena más larga y la más espectacular, con una cifra comparada "
+                  "con algo que el espectador conoce. Un solo hilo: nada de cronología completa ni de subtramas.")
 _MECANISMO = "Lo invisible hecho visible: la escena más larga y la más espectacular. Es lo que hace que el video se vea dos veces."
 # Corta: la de por defecto, sin requisito de minutos. Larga: Creator Rewards pide más de un minuto.
 DURATIONS = {
@@ -104,6 +114,15 @@ DURATIONS = {
 | 5 | 36–45 s | **El remate** | {_REMATE} |
 
 En tan poco tiempo no cabe nada de relleno: una sola idea, una sola analogía y un solo dato.""",
+        "estructura_historia": f"""| # | Tiempo aprox. | Escena | Función |
+|---|---|---|---|
+| 1 | 0–4 s | **El gancho** | {_GANCHO_HISTORIA} |
+| 2 | 4–13 s | **Dónde, cuándo y quién** | {_CONTEXTO_HISTORIA} **Bucle abierto:** {_BUCLE} |
+| 3 | 13–25 s | **El momento clave** | {_MOMENTO_CLAVE} |
+| 4 | 25–36 s | **El detalle que lo explica** | El giro: la causa, la decisión o el dato sorprendente, respaldado en `research.md`, que explica por qué pasó o cómo terminó y cierra el bucle abierto con el clímax visual y musical. {_GIRO} |
+| 5 | 36–45 s | **El remate** | {_REMATE} |
+
+En tan poco tiempo no cabe la historia entera: un suceso, una crisis y un detalle sorprendente.""",
     },
     "larga": {
         "etiqueta": "61–70 s", "min": 61, "max": 70, "escenas": 7, "giro": 6, "palabras_es": "170–195", "palabras_en": "180–205",
@@ -116,8 +135,35 @@ En tan poco tiempo no cabe nada de relleno: una sola idea, una sola analogía y 
 | 5 | 40–50 s | **El dato que sorprende** | Una cifra o una comparación concreta, respaldada en `research.md`. Micro-gancho propio del tema, no una fórmula. |
 | 6 | 50–60 s | **El giro** | Cierra el bucle abierto de la escena 2 con el clímax visual y musical. {_GIRO} Por qué esto le importa al espectador. |
 | 7 | 60–70 s | **El remate** | {_REMATE} |""",
+        "estructura_historia": f"""| # | Tiempo aprox. | Escena | Función |
+|---|---|---|---|
+| 1 | 0–5 s | **El gancho** | {_GANCHO_HISTORIA} |
+| 2 | 5–14 s | **Dónde, cuándo y quién** | {_CONTEXTO_HISTORIA} **Bucle abierto:** {_BUCLE} |
+| 3 | 14–26 s | **El problema** | Qué salió mal o qué nadie se explicaba, con una cifra comparada con algo que el espectador conoce. |
+| 4 | 26–40 s | **El momento clave** | {_MOMENTO_CLAVE} |
+| 5 | 40–50 s | **Cuando parecía resuelto** | Un obstáculo nuevo o un dato que lo complica, respaldado en `research.md`. Micro-gancho propio del tema, no una fórmula. |
+| 6 | 50–60 s | **El detalle que lo explica** | Cierra el bucle abierto de la escena 2 con el clímax visual y musical: la causa, la decisión o el dato que explica por qué pasó o cómo terminó. {_GIRO} Por qué importa hoy. |
+| 7 | 60–70 s | **El remate** | {_REMATE} |""",
     },
 }
+# Cómo cuenta cada serie: la estructura de escenas y los tipos de gancho cambian; los pasos y archivos, no.
+NARRATIVAS = {"explicacion": "Explicación: por qué pasa algo", "historia": "Historia real: un suceso contado"}
+TIPOS_GANCHO = {
+    "explicacion": """- **Injusticia entre dos personas:** "¿Por qué a ti te pasa y a quien tienes al lado no?"
+- **Pregunta imposible:** "¿Por qué ves puntitos cuando te levantas rápido?"
+- **Afirmación que parece falsa:** "Tu estómago no ruge de hambre."
+- **Mito que se rompe:** "Todos creen que es por el frío… y no."
+- **Reto o apuesta:** "Apuesto a que no adivinas qué parte de tu cuerpo hace esto."
+- **Comparación sorprendente:** una cifra enorme contra algo que el espectador tiene delante.""",
+    "historia": """- **Cifra imposible:** "En [año], [alguien] [hizo algo que parece imposible] durante [cifra]."
+- **Parece mentira:** "[Un país, un pueblo o una persona] [hizo algo enorme] por [una causa trivial]."
+- **Pregunta sin respuesta:** "¿Cómo [lograron algo] con solo [un recurso mínimo]?"
+- **Mito que se rompe:** "Todos creen que [la versión popular]… pero pasó otra cosa."
+- **Cuenta atrás:** "Tenían [una cifra de tiempo] antes de que [lo peor]."
+- **Comparación sorprendente:** una cifra del suceso contra algo que el espectador tiene delante.
+Los corchetes son la forma, no el contenido: rellénalos con el caso de `research.md`.""",
+}
+MAX_SERIE_NOTES = 1500
 ALLOWED_TOOLS = ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"]
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 # El agente corre en un solo turno: cuando lo cierra, el proceso de Claude Code termina
@@ -219,6 +265,8 @@ class Serie:
     voz_estilo: str = ""
     cta: dict = field(default_factory=dict)  # frase final por idioma
     voz_elevenlabs: str = ""  # ID de la voz de ElevenLabs para sus videos en español; vacío: Chatterbox
+    narrativa: str = "explicacion"  # estructura de escenas y ganchos (NARRATIVAS)
+    indicaciones: str = ""  # instrucciones propias de la serie para el agente
     id: str = ""
 
     @classmethod
@@ -249,6 +297,10 @@ class Serie:
             if voces.get(lang) not in VOICES[lang]:
                 raise ValueError(f"Voz no válida para {LANGUAGE_NAMES[lang]}: {voces.get(lang)}")
         self.voces = {lang: voces[lang] for lang in LANGUAGES}
+        if self.narrativa not in NARRATIVAS:
+            raise ValueError(f"Tipo de narración no válido: {self.narrativa}")
+        self.indicaciones = "\n".join(" ".join(line.split()) for line in str(self.indicaciones or "").splitlines()).strip()
+        _check_len("Las indicaciones de la serie", self.indicaciones, 0, MAX_SERIE_NOTES)
         self.voz_elevenlabs = str(self.voz_elevenlabs or "").strip()
         if self.voz_elevenlabs and not ELEVEN_VOICE_RE.match(self.voz_elevenlabs):
             raise ValueError("Voz de ElevenLabs no válida.")
@@ -357,7 +409,11 @@ class VideoRequest:
         voz = ficha.voces.get(self.idioma) or DEFAULT_VOICES["femenina"][self.idioma]
         length = DURATIONS[self.duracion]
         return {
-            "ESTRUCTURA": length["estructura"],  # primero: trae dentro otras variables
+            "ESTRUCTURA": length["estructura_historia" if ficha.narrativa == "historia" else "estructura"],  # primero: trae dentro otras variables
+            "TIPOS_GANCHO": TIPOS_GANCHO.get(ficha.narrativa, TIPOS_GANCHO["explicacion"]),
+            "INDICACIONES_SERIE": (f"\n**Indicaciones propias de la serie** (del usuario: mandan sobre las reglas generales de narración "
+                                   f"y estilo, nunca sobre las de contenido, voz, QA ni archivos):\n{ficha.indicaciones}\n"
+                                   if ficha.indicaciones else ""),
             "VOZ_MOTOR": self._voice_engine(ficha),
             "VOZ_RESPALDO": VOZ_RESPALDO_CHATTERBOX if chatterbox_ready() else VOZ_RESPALDO_KOKORO,
             "VOZ_ELEVENLABS": ficha.voz_elevenlabs or "(ninguna)",

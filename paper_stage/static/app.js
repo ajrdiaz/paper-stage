@@ -1138,6 +1138,10 @@ function serieForm(c, isNew) {
     <div class="field"><label for="c-estilo">Estilo visual</label>
       <textarea id="c-estilo" name="estilo" maxlength="800">${esc(c.estilo || "")}</textarea>
       <span class="hint">Cómo se ve: técnica, fondo, luz y movimiento. Es lo que hace reconocible la serie.</span></div>
+    <div class="field"><label for="c-narrativa">Cómo cuenta</label>
+      <select id="c-narrativa" name="narrativa">${Object.entries(CONFIG.narrativas).map(([k, v]) =>
+        `<option value="${k}" ${(c.narrativa || "explicacion") === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
+      <span class="hint">Cambia la estructura de las escenas y los tipos de gancho. Explicación: mito, mecanismo y giro. Historia real: cifras en el gancho, el momento clave y el detalle que lo explica.</span></div>
     <div class="fields-2">
       <div class="field"><label for="c-tono">Tono</label>
         <textarea id="c-tono" name="tono" maxlength="400" rows="3">${esc(c.tono || "")}</textarea>
@@ -1145,6 +1149,9 @@ function serieForm(c, isNew) {
       <div class="field"><label for="c-presentador">Presentador <span class="small muted">(opcional)</span></label>
         <textarea id="c-presentador" name="presentador" maxlength="800" rows="3" placeholder="Vacío: solo voz en off sobre la animación">${esc(c.presentador || "")}</textarea></div>
     </div>
+    <div class="field"><label for="c-indicaciones">Indicaciones propias <span class="small muted">(opcional)</span></label>
+      <textarea id="c-indicaciones" name="indicaciones" maxlength="1500" rows="4" placeholder="Ej.: cifras concretas en el gancho; prioriza casos de México poco contados; nada de política actual">${esc(c.indicaciones || "")}</textarea>
+      <span class="hint">Van al agente en cada video de la serie. Mandan sobre las reglas generales de narración y estilo, nunca sobre las de contenido, voz o revisión.</span></div>
     <div class="field"><span class="label">Paleta</span>
       <div class="palette-editor" id="palette"></div>
       <span class="hint">De 3 a 7 colores, con uno de acento que destaque en los subtítulos.</span></div>
@@ -1246,6 +1253,7 @@ async function renderSerieEditor(id, params) {
     const body = {
       nombre: d.nombre, nicho: d.nicho, idioma: d.idioma, estilo: d.estilo, tono: d.tono, presentador: d.presentador,
       paleta: palette, voces: { es: d.voz_es, en: d.voz_en }, voz_estilo: d.voz_estilo, voz_elevenlabs: d.voz_elevenlabs || "",
+      narrativa: d.narrativa, indicaciones: d.indicaciones,
       cta: { es: d.cta_es, en: d.cta_en },
     };
     $("#char-save").disabled = true;

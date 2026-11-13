@@ -186,7 +186,7 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             "durations": {k: v["etiqueta"] for k, v in core.DURATIONS.items()},
             "efforts": core.EFFORTS, "languages": core.LANGUAGES, "formats": core.FORMATS,
             "demo": demo, "concurrency": manager.concurrency, "default_cta": core.DEFAULT_CTA,
-            "voices": core.VOICES, "default_serie": manager.series.list()[0].id,
+            "voices": core.VOICES, "narrativas": core.NARRATIVAS, "default_serie": manager.series.list()[0].id,
         })
 
     async def health(request: Request):
