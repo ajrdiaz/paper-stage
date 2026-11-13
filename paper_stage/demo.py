@@ -303,6 +303,12 @@ IDEAS = {
         ("¿Por qué ves puntitos al levantarte?", "Tu sangre llega tarde."),
         ("¿Por qué se te arrugan los dedos en el agua?", "Tu cuerpo lo hace a propósito."),
         ("¿Por qué te da escalofrío sin frío?", "Una orden que no diste tú."),
+        ("¿Por qué se te tapan los oídos en el avión?", "El aire empuja desde un solo lado."),
+        ("¿Por qué te pica una herida al cerrarse?", "Los nervios vuelven a encenderse."),
+        ("¿Por qué ves borroso bajo el agua?", "Tu ojo pierde su lente de aire."),
+        ("¿Por qué te tiembla el párpado?", "Un músculo diminuto que se cansa."),
+        ("¿Por qué crujen los dedos?", "No es el hueso: es una burbuja."),
+        ("¿Por qué te mareas al girar?", "El líquido de tu oído sigue girando."),
     ],
     "en": [
         ("Why do you get hiccups?", "Your diaphragm does it without warning."),
@@ -311,16 +317,23 @@ IDEAS = {
         ("Why do onions make you cry?", "The onion defends itself from you."),
         ("Why do yawns spread?", "Your brain copies without asking."),
         ("Why do you see spots when you stand up?", "Your blood arrives late."),
+        ("Why do your ears pop on a plane?", "Air pushes from just one side."),
+        ("Why do your knuckles crack?", "It isn't the bone: it's a bubble."),
+        ("Why do you get dizzy after spinning?", "The fluid in your ear keeps spinning."),
+        ("Why does your eyelid twitch?", "A tiny muscle that gets tired."),
+        ("Why do wounds itch when they heal?", "The nerves switch back on."),
     ],
 }
 
 
-async def suggest_demo(serie: Serie, idioma: str, pista: str, used: list[str], n: int) -> list[dict]:
-    """Sugerencias fijas para el modo demo: sin Claude y sin costo."""
+async def suggest_demo(serie: Serie, idioma: str, pista: str, used: list[str], n: int,
+                       radar: dict | None = None) -> list[dict]:
+    """Sugerencias fijas para el modo demo: sin Claude y sin costo. Las ideas del Radar van primero, como pide el prompt."""
     await asyncio.sleep(min(SPEED, 0.6))
     taken = {topic_key(t, idioma) for t in used}
-    fresh = [(t, g) for t, g in IDEAS[idioma] if topic_key(t, idioma) not in taken]
-    return [{"tema": t, "gancho": g} for t, g in fresh[:n]]
+    from_radar = [{"tema": i["tema"], "gancho": "", "radar": i["id"]} for i in (radar or {}).get("ideas", [])]
+    fresh = [{"tema": t, "gancho": g, "radar": ""} for t, g in IDEAS[idioma] if topic_key(t, idioma) not in taken]
+    return (from_radar + fresh)[:n]
 
 
 RADAR_TEXTS = [

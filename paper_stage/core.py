@@ -419,6 +419,41 @@ def topic_key(tema: str, idioma: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", text)) + "|" + idioma
 
 
+# Palabras que no dicen de qué trata un tema: «¿Por qué te…?» y «Why do you…?» las llevan todos.
+_TOPIC_STOP = set("""a al algo ante asi con como cual cuando de del desde donde el ella ellos en entre es esa ese eso esta
+este esto estas estos hay la las le les lo los mas me mi mis muy no o otra otro otras otros para pero por porque que se si
+sin sobre su sus te tu tus un una uno unos unas y ya justo siempre nunca hace hacen pasa tan tanto da dan pone pones
+ponen tiene tienes tienen puede puedes pueden despues luego ver ves cada""".split()) | set(
+    """a an and are at be by can do does for from how if in is it its of on or so the to what when where why with you your
+    yourself""".split())
+SAME_TOPIC = 0.8  # parte de las palabras con contenido del tema más corto que deben estar en el otro
+
+
+def topic_words(tema: str) -> set[str]:
+    """Las raíces de las palabras con contenido de un tema, sin tildes ni plurales: «lucecitas» y «lucecita», o
+    «lloras» y «llorar», son la misma (las cinco primeras letras bastan en temas tan cortos)."""
+    text = unicodedata.normalize("NFKD", tema).encode("ascii", "ignore").decode().lower()
+    words = set()
+    for word in re.findall(r"[a-z0-9]+", text):
+        if word in _TOPIC_STOP or (len(word) < 2 and not word.isdigit()):  # una cifra sí distingue un tema
+            continue
+        if len(word) > 4 and word.endswith("es"):
+            word = word[:-2]
+        elif len(word) > 3 and word.endswith("s"):
+            word = word[:-1]
+        words.add(word[:5])
+    return words
+
+
+def same_topic(a: str, b: str) -> bool:
+    """Dos temas son el mismo aunque cambie la redacción si comparten casi todas sus palabras con contenido:
+    «¿Por qué cuando cierras los ojos fuerte ves lucecitas?» y «Por qué ves lucecitas al cerrar fuerte los ojos»."""
+    wa, wb = topic_words(a), topic_words(b)
+    if not wa or not wb:
+        return " ".join(a.lower().split()) == " ".join(b.lower().split())
+    return len(wa & wb) / min(len(wa), len(wb)) >= SAME_TOPIC
+
+
 SUGGEST_PROMPT = {
     "es": "Propón {n} temas en español.",
     "en": "Propón {n} temas en inglés (el campo «tema» en inglés; el «gancho», en español).",
@@ -443,9 +478,11 @@ async def _ask_json_list(prompt: str) -> list:
     return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
 
 
-async def suggest_topics(serie: Serie, idioma: str, pista: str, used: list[str], n: int) -> list[dict]:
-    """Pide a Claude n ideas de tema del nicho de la serie [{"tema", "gancho"}].
-    Quien llama descarta las repetidas."""
+async def suggest_topics(serie: Serie, idioma: str, pista: str, used: list[str], n: int,
+                         radar: dict | None = None) -> list[dict]:
+    """Pide a Claude n ideas de tema del nicho de la serie [{"tema", "gancho", "radar"}]: primero las del Radar
+    que encajen en el nicho (con su id) y luego propias, guiadas por lo que el Radar midió. Quien llama descarta
+    las repetidas y comprueba que cada id del Radar exista."""
     lines = [
         f"Eres el guionista de «{serie.nombre}»: videos virales cortos para público general adulto "
         f"sobre este nicho: {serie.nicho}. Tono: {serie.tono}",
@@ -456,14 +493,27 @@ async def suggest_topics(serie: Serie, idioma: str, pista: str, used: list[str],
     ]
     if pista:
         lines.append(f"Deben tratar sobre: {pista}")
+    radar = radar or {}
+    if radar.get("ideas"):
+        lines.append("Ideas del Radar, sacadas de los videos con más vistas de las cuentas que vigila el usuario "
+                     f"(nicho del Radar: {radar.get('nicho') or 'sin nombre'}). Ponlas primero, con su tema sin cambiarle "
+                     "una palabra y su id en «radar», pero solo las que encajen en el nicho de la serie y no repitan un tema "
+                     "ya hecho; las demás, ignóralas:\n" + "\n".join(f"- [{i['id']}] {i['tema']}" for i in radar["ideas"]))
+    pattern = radar.get("patrones") or {}
+    hints = [f"{label}: " + ", ".join(f"{p['valor']} ({p['veces']})" for p in pattern.get(key) or [])
+             for key, label in (("ganchos", "tipos de gancho"), ("temas", "temas")) if pattern.get(key)]
+    if hints:
+        lines.append("Lo que más funciona en los videos virales del Radar (contado por la app; úsalo de guía para las "
+                     "ideas propias, sin copiar temas): " + "; ".join(hints) + ".")
     if used:
         lines.append("Estos temas ya están hechos. Puedes proponer temas relacionados o parecidos, "
                      "pero nunca uno igual:\n" + "\n".join(f"- {t}" for t in used))
+    lines.append("Nunca dos temas que sean el mismo con otras palabras, ni entre sí ni con uno ya hecho.")
     lines.append('Responde solo con JSON, sin texto alrededor: [{"tema": "...", "gancho": "una frase corta (15 palabras como máximo) '
-                 'sobre por qué engancha"}]')
+                 'sobre por qué engancha", "radar": "el id si es una idea del Radar; si no, vacío"}]')
     items = await _ask_json_list("\n\n".join(lines))
-    return [{"tema": _clean(i["tema"]), "gancho": str(i.get("gancho") or "").strip()}
-            for i in items if _clean(i.get("tema"))]
+    return [{"tema": _clean(i["tema"]), "gancho": str(i.get("gancho") or "").strip(), "radar": str(i.get("radar") or "").strip()}
+            for i in items if isinstance(i, dict) and _clean(i.get("tema"))]
 
 
 def render_prompt(variables: dict[str, str]) -> str:

@@ -32,6 +32,9 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
+SUGGESTIONS = 5  # temas por tanda en «Sugerir»
+
+
 def _error(message: str, status: int = 400) -> JSONResponse:
     return JSONResponse({"error": message}, status_code=status)
 
@@ -199,7 +202,8 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             return _error(str(exc))
 
     async def suggest(request: Request):
-        """3 temas nuevos del nicho de la serie: ni ya producidos o en cola, ni entre los que ya se mostraron."""
+        """5 temas nuevos del nicho de la serie, primero los del Radar que encajen: ni ya producidos o en cola, ni
+        entre los que ya se mostraron, ni el mismo tema con otras palabras."""
         payload = await _json(request)
         serie = manager.series.get(payload.get("serie_id")) if payload.get("serie_id") else manager.series.list()[0]
         if not serie:
@@ -210,21 +214,34 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         pista = " ".join(str(payload.get("pista") or "").split())[:120]
         shown = [" ".join(str(t).split()) for t in (payload.get("evitar") or [])][:60]
         used = await asyncio.to_thread(manager.used_topics, idioma, serie.id)
+        taken = used + shown
+        # Las ideas del Radar están en español; las ya hechas, mostradas o parecidas no se ofrecen.
+        context = await asyncio.to_thread(radar.for_suggestions) if idioma == "es" else {}
+        radar_ideas = {i["id"]: i for i in context.get("ideas", [])
+                       if not any(core.same_topic(i["tema"], t) for t in taken)}
+        context = {**context, "ideas": list(radar_ideas.values())[:12]}
         try:
-            ideas = await suggester(serie, idioma, pista, used + shown, 6)
+            ideas = await suggester(serie, idioma, pista, taken, SUGGESTIONS + 3, radar=context)
         except Exception as exc:  # noqa: BLE001 — credenciales, red o respuesta rara del modelo
             return _error(f"No se pudieron sugerir temas: {exc}", 502)
-        taken = {core.topic_key(t, idioma) for t in used + shown}
         picked = []
-        for idea in ideas:
-            key = core.topic_key(idea["tema"], idioma)
-            if key in taken or not 2 <= len(idea["tema"]) <= 200:
+        for idea in sorted(ideas, key=lambda i: i.get("radar", "") not in radar_ideas):  # las del Radar, primero
+            source = radar_ideas.get(idea.get("radar", ""))
+            if source:  # el tema exacto del Radar, con lo que trae para el guion
+                notas = [source.get("gancho") and f"Gancho sugerido: {source['gancho']}",
+                         source.get("cierre") and f"Cierre sugerido: {source['cierre']}",
+                         source.get("verificar") and f"Verificar con fuentes: {source['verificar']}"]
+                idea = {"tema": source["tema"], "gancho": source.get("gancho") or idea.get("gancho", ""), "origen": "radar",
+                        "notas": "\n".join(n for n in notas if n), "fuentes": source.get("fuentes", [])}
+            else:
+                idea = {"tema": idea["tema"], "gancho": idea.get("gancho", ""), "origen": "claude"}
+            if not 2 <= len(idea["tema"]) <= 200 or any(core.same_topic(idea["tema"], t) for t in taken):
                 continue
             if await asyncio.to_thread(manager.is_used, idea["tema"], idioma, serie.id):
                 continue
-            taken.add(key)
+            taken.append(idea["tema"])
             picked.append(idea)
-            if len(picked) == 3:
+            if len(picked) == SUGGESTIONS:
                 break
         if not picked:
             return _error("No salieron temas nuevos. Prueba otra vez o cambia la pista.", 502)

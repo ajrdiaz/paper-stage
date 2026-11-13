@@ -631,14 +631,13 @@ async def make_ideas(niche: dict, context: list[dict], used: list[str], n: int) 
 
 def clean_ideas(items: list, known_ids: set[str], taken: list[str], n: int = IDEAS_PER_RUN) -> list[dict]:
     """Quita los temas repetidos y los ID de video que no están en el Radar."""
-    seen = {core.topic_key(t, IDEA_LANGUAGE) for t in taken}
+    seen = list(taken)
     ideas = []
     for item in items:
         tema = " ".join(str(item.get("tema") or "").split()) if isinstance(item, dict) else ""
-        key = core.topic_key(tema, IDEA_LANGUAGE)
-        if not 2 <= len(tema) <= MAX_IDEA_TOPIC or key in seen:
+        if not 2 <= len(tema) <= MAX_IDEA_TOPIC or any(core.same_topic(tema, t) for t in seen):
             continue
-        seen.add(key)
+        seen.append(tema)
         sources = item.get("fuentes") if isinstance(item.get("fuentes"), list) else []
         ideas.append({"tema": tema, "fuentes": [str(s) for s in dict.fromkeys(sources) if str(s) in known_ids][:4],
                       **{k: " ".join(str(item.get(k) or "").split())[:500] for k in ("gancho", "patron", "por_que", "cierre", "verificar")}})
@@ -1050,16 +1049,23 @@ class Radar:
         if not cursor.rowcount:
             raise KeyError(idea_id)
 
+    def for_suggestions(self) -> dict:
+        """Lo que el Radar aporta a «Sugerir» del Estudio: sus ideas sin descartar, el nicho y los patrones contados."""
+        videos = self._with_analysis(self._ranked(time.time()))
+        ideas = [{**json.loads(data), "id": idea_id} for idea_id, data in self.db.execute(
+            "SELECT id, data FROM radar_ideas WHERE status = 'nueva' ORDER BY created_at DESC").fetchall()]
+        return {"ideas": ideas, "nicho": (self.active_niche() or {}).get("nicho", ""), "patrones": patterns(videos)}
+
     def _ideas_view(self, videos: list[dict]) -> list[dict]:
         by_id = {v["id"]: v for v in videos}
-        produced = {core.topic_key(t, IDEA_LANGUAGE) for t in self.used_topics(IDEA_LANGUAGE)}
+        produced = self.used_topics(IDEA_LANGUAGE)
         ideas = []
         for idea_id, data, created in self.db.execute("SELECT id, data, created_at FROM radar_ideas WHERE status = 'nueva' "
                                                       "ORDER BY created_at DESC").fetchall():
             idea = json.loads(data)
             idea["fuentes"] = [{k: by_id[s][k] for k in ("id", "url", "handle", "views", "multiple")}
                                for s in idea.get("fuentes", []) if s in by_id]
-            used = core.topic_key(idea["tema"], IDEA_LANGUAGE) in produced
+            used = any(core.same_topic(idea["tema"], t) for t in produced)  # aunque el video lo diga con otras palabras
             ideas.append({**idea, "id": idea_id, "created_at": created, "usada": used})
         return ideas
 

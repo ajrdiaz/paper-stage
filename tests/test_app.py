@@ -5,6 +5,7 @@ Usan el agente de demostración (sin Claude) y directorios temporales.
 
 import asyncio
 import base64
+import itertools
 import json
 import os
 import shutil
@@ -131,6 +132,16 @@ class CoreTests(unittest.TestCase):
         req = core.VideoRequest(tema="El hipo")
         req.validate()
         self.assertIn("assets/modelos/cuerpo-torso.js", core.render_prompt(req.variables()))
+
+    def test_same_topic_with_other_words(self):
+        for a, b, same in (
+                ("¿Por qué cuando cierras los ojos fuerte ves lucecitas y colores?", "Por qué ves lucecitas cuando cierras los ojos fuerte", True),
+                ("¿Por qué lloras al cortar cebolla?", "¿Por qué la cebolla te hace llorar?", True),
+                ("Why do onions make you cry?", "Why does cutting onions make you cry?", True),
+                ("¿Por qué se te duerme el pie?", "¿Por qué se te duerme la mano?", False),
+                ("¿Por qué te da hambre justo después de comer algo dulce?", "¿Por qué te da sueño después de comer?", False)):
+            with self.subTest(a=a, b=b):
+                self.assertEqual(core.same_topic(a, b), same)
 
     def test_voice_engine_in_the_prompt(self):
         original = core.chatterbox_ready
@@ -341,19 +352,30 @@ class AppTests(unittest.TestCase):
             self.assertEqual(client.get("/api/config").status_code, 200)  # cookie
 
     def test_suggestions_never_repeat(self):
-        with self.make_client(data="data-suggest") as client:
+        manager = JobManager(TMP / "data-suggest", runner=run_demo)
+        with TestClient(create_app(manager, token=""), base_url="http://127.0.0.1") as client:
             res = client.post("/api/jobs", json={"tema": "¿Por qué el mar es salado?", "idioma": "es"})
             wait_for(client, res.json()["id"], {"done", "failed"})
+            # Dos ideas del Radar: una es el video ya hecho con otras palabras; la otra, nueva.
+            for i, (tema, fuentes) in enumerate([("¿Por qué es salado el mar?", []),
+                                                 ("¿Por qué te da hambre después de comer dulce?", ["v1"])]):
+                manager.store.db.execute("INSERT INTO radar_ideas (id, tema, data, created_at) VALUES (?, ?, ?, ?)", [
+                    f"idea{i}", tema, json.dumps({"tema": tema, "fuentes": fuentes, "gancho": "G", "verificar": "V"}), time.time() + i])
+            manager.store.db.commit()
             shown = []
-            for _ in range(2):
+            for round_ in range(2):
                 res = client.post("/api/suggest", json={"idioma": "es", "evitar": shown})
                 self.assertEqual(res.status_code, 200, res.text)
-                temas = [t["tema"] for t in res.json()["temas"]]
-                self.assertEqual(len(temas), 3)
-                shown += temas
-            keys = [core.topic_key(t, "es") for t in shown]
-            self.assertEqual(len(set(keys)), 6)
-            self.assertNotIn(core.topic_key("¿Por qué el mar es salado?", "es"), keys)
+                temas = res.json()["temas"]
+                self.assertEqual(len(temas), 5)
+                if round_ == 0:  # la idea nueva del Radar va primero, con sus fuentes y notas para el guion
+                    self.assertEqual((temas[0]["origen"], temas[0]["fuentes"]), ("radar", ["v1"]))
+                    self.assertIn("Verificar con fuentes: V", temas[0]["notas"])
+                    self.assertTrue(all(t["origen"] == "claude" for t in temas[1:]))
+                shown += [t["tema"] for t in temas]
+            self.assertEqual(len(shown), 10)
+            for a, b in itertools.combinations(shown + ["¿Por qué el mar es salado?"], 2):
+                self.assertFalse(core.same_topic(a, b), (a, b))
 
     def test_series(self):
         with self.make_client(data="data-series") as client:

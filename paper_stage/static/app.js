@@ -347,14 +347,14 @@ function studioForm(prefs, chars) {
     </div>
     <div class="field" id="single-field">
       <div class="row"><label for="tema">Tema</label><span class="spacer"></span>
-        <button type="button" class="btn small" id="suggest-open" aria-expanded="false" aria-controls="suggest-panel">Sugerir 3 temas</button></div>
+        <button type="button" class="btn small" id="suggest-open" aria-expanded="false" aria-controls="suggest-panel">Sugerir 5 temas</button></div>
       <input id="tema" name="tema" type="text" class="tema-input" maxlength="200" autocomplete="off"
         placeholder="Ej.: ¿Por qué se te duerme una pierna?" value="${esc(prefs.tema || "")}">
       <span class="hint">Escríbelo en el idioma del video. El agente investiga, escribe el guion, anima y renderiza. Los temas no se repiten dentro de una serie.</span>
       <div id="suggest-panel" class="suggest-panel hidden">
         <div class="row">
           <input id="pista" type="text" maxlength="120" autocomplete="off" aria-label="Sobre qué (opcional)" placeholder="Sobre qué (opcional): sueño, piel, hambre…">
-          <button type="button" class="btn small" id="suggest-more">Otras 3</button>
+          <button type="button" class="btn small" id="suggest-more">Otros 5</button>
         </div>
         <div id="suggest-list" class="suggest-list" role="radiogroup" aria-label="Temas sugeridos" aria-live="polite"></div>
       </div>
@@ -440,7 +440,7 @@ async function renderStudio(params) {
   const prefs = { idioma: "es", formato: "vertical", duracion: "corta", model: CONFIG.default_model, effort: "high", ...saved,
                   tema: params.get("tema") || "", notas: params.get("notas") || "" };
   // Los videos del Radar que inspiraron la idea: para avisar si el guion se les parece demasiado.
-  const inspiracion = (params.get("fuentes") || "").split(",").filter(Boolean);
+  let inspiracion = (params.get("fuentes") || "").split(",").filter(Boolean);
   const asked = params.get("serie");
   showAccountOf(asked);
   const chars = SERIES.filter(c => inAccount(c.id));
@@ -493,8 +493,8 @@ async function renderStudio(params) {
 
   const current = () => { const d = new FormData(form); return { pid: d.get("serie_id"), lang: d.get("idioma") }; };
 
-  // Sugerencias: 3 temas nuevos del nicho de la serie; los ya mostrados no vuelven a salir.
-  let shown = [];
+  // Sugerencias: 5 temas nuevos del nicho de la serie, primero los del Radar; los ya mostrados no vuelven a salir.
+  let shown = [], suggested = [], radarNotes = "";
   const list = $("#suggest-list");
   async function suggest() {
     if (list.getAttribute("aria-busy") === "true") return;  // Enter en la pista no debe lanzar otra petición
@@ -505,9 +505,10 @@ async function renderStudio(params) {
     try {
       const res = await api("/api/suggest", { method: "POST", body: { idioma, serie_id, pista: $("#pista").value, evitar: shown } });
       shown.push(...res.temas.map(t => t.tema));
-      list.innerHTML = res.temas.map(t => `
-        <button type="button" class="suggestion" role="radio" aria-checked="false" data-tema="${esc(t.tema)}">
-          <strong>${esc(t.tema)}</strong>${t.gancho ? `<span class="small muted">${esc(t.gancho)}</span>` : ""}</button>`).join("");
+      suggested = res.temas;
+      list.innerHTML = res.temas.map((t, i) => `
+        <button type="button" class="suggestion" role="radio" aria-checked="false" data-i="${i}">
+          <strong>${t.origen === "radar" ? `<span class="pill plain tiktok-src" title="Idea del Radar: sale de videos con muchas vistas de las cuentas que vigilas">Radar</span> ` : ""}${esc(t.tema)}</strong>${t.gancho ? `<span class="small muted">${esc(t.gancho)}</span>` : ""}</button>`).join("");
     } catch (err) {
       list.innerHTML = `<p class="small" style="color:var(--warn)">${esc(err.message)}</p>`;
     } finally { $("#suggest-more").disabled = false; list.removeAttribute("aria-busy"); }
@@ -551,7 +552,14 @@ async function renderStudio(params) {
     const pick = ev.target.closest(".suggestion:not(.skeleton)");
     if (!pick) return;
     $$(".suggestion", list).forEach(b => b.setAttribute("aria-checked", b === pick));
-    $("#tema").value = pick.dataset.tema;
+    const idea = suggested[Number(pick.dataset.i)];
+    $("#tema").value = idea.tema;
+    // Una idea del Radar trae sus videos de origen (para avisar si el guion se les parece) y notas para el guion.
+    // Las notas solo se reemplazan si siguen siendo las de otra idea del Radar o están vacías.
+    inspiracion = idea.fuentes || [];
+    const notas = $("#notas");
+    if (!notas.value.trim() || notas.value === radarNotes) notas.value = idea.notas || "";
+    radarNotes = idea.notas || "";
     $("#form-error").textContent = "";
   });
 
