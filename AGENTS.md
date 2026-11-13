@@ -39,6 +39,7 @@ Usa siempre `.venv/bin/python`, porque el `python3` del sistema no tiene Kokoro,
 | `paper_stage/publishing.py` | Publicar en TikTok vía Buffer (API GraphQL) con el video alojado en una carpeta de Google Drive para escritorio compartida con enlace: configuración, copia, espera de sincronización, comprobación del enlace público, `createPost` e historial (tablas `settings` y `publications`). La cuenta de TikTok es de cada serie (tabla `serie_channels`). |
 | `paper_stage/radar.py` | Radar de cuentas de TikTok: fuentes de datos (Apify o ventana con sesión), lecturas e historial de vistas, ranking por código (`rank_videos`), análisis de un video con Claude, búsqueda de nichos (`clean_niches`) e ideas (`clean_ideas`). Tablas `radar_*`; portadas y perfil de navegador en `data/radar/`. |
 | `paper_stage/dramas.py` | Minidramas (en preparación): clave de la API de xAI (Grok Imagine) en `settings` y comprobación de acceso, que solo lista modelos (`check`). Aún no genera clips. |
+| `paper_stage/eleven.py` | Voz con ElevenLabs (en prueba): clave en `settings` (solo viaja en `xi-api-key` a `api.elevenlabs.io`), comprobación del plan y las voces (no gasta), y muestras de una escena ya hecha con varias voces en `data/voces/muestras/` para elegir de oído junto a la voz actual. Gastan créditos: la interfaz pide confirmación con el costo. Aún no cambia la voz de ninguna serie. |
 | `paper_stage/review.py` | Revisión tras cada video: transcribe la voz y la compara con el guion (`compare_speech`), mide audio y video, y Claude revisa fotogramas. Escribe `revision.json` y `revision/`; las sugerencias salen en la ficha y se aplican con un trabajo de corrección (`create_correction`). |
 | `paper_stage/web.py` | Servidor Starlette y API; `SameOriginGuard` siempre, y `TokenAuth` si hay `PAPER_STAGE_TOKEN`. |
 | `paper_stage/demo.py` | Agente simulado que escribe un video falso completo (para `--demo` y las pruebas). |
@@ -49,7 +50,7 @@ Usa siempre `.venv/bin/python`, porque el `python3` del sistema no tiene Kokoro,
 | `run_agent.py` | CLI. |
 | `tests/test_app.py` | Pruebas de extremo a extremo con el agente demo y directorios temporales. |
 
-Variables de entorno útiles: `PAPER_STAGE_OUTPUT`, `PAPER_STAGE_DATA` (redirigen `output/` y `data/`; las pruebas las usan), `PAPER_STAGE_DEMO=1`, `PAPER_STAGE_DEMO_DELAY`, `PAPER_STAGE_CONCURRENCY`, `PAPER_STAGE_TOKEN`, `PAPER_STAGE_BUFFER_KEY`, `PAPER_STAGE_APIFY_TOKEN` y `PAPER_STAGE_XAI_KEY` (claves de Buffer, Apify y xAI; si no, las guardadas desde Sistema).
+Variables de entorno útiles: `PAPER_STAGE_OUTPUT`, `PAPER_STAGE_DATA` (redirigen `output/` y `data/`; las pruebas las usan), `PAPER_STAGE_DEMO=1`, `PAPER_STAGE_DEMO_DELAY`, `PAPER_STAGE_CONCURRENCY`, `PAPER_STAGE_TOKEN`, `PAPER_STAGE_BUFFER_KEY`, `PAPER_STAGE_APIFY_TOKEN`, `PAPER_STAGE_XAI_KEY` y `PAPER_STAGE_ELEVENLABS_KEY` (claves de Buffer, Apify, xAI y ElevenLabs; si no, las guardadas desde Sistema).
 
 ## Invariantes (no romper)
 

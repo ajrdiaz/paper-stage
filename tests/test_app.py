@@ -4,6 +4,7 @@ Usan el agente de demostración (sin Claude) y directorios temporales.
 """
 
 import asyncio
+import base64
 import json
 import os
 import shutil
@@ -25,7 +26,7 @@ from paper_stage import core, library  # noqa: E402
 from paper_stage.demo import (LINES, analyze_demo, demo_account_search, demo_radar_source,  # noqa: E402
                               find_niches_demo, make_ideas_demo, run_demo)
 from paper_stage.jobs import JobManager  # noqa: E402
-from paper_stage import dramas, publishing, radar, review  # noqa: E402
+from paper_stage import dramas, eleven, publishing, radar, review  # noqa: E402
 
 # Las pruebas nunca deben escribir en el Google Drive real de quien las ejecuta.
 publishing.drive_roots = lambda: []
@@ -1389,6 +1390,108 @@ class DramaTests(unittest.TestCase):
             self.assertEqual(core.agent_env()["PAPER_STAGE_XAI_KEY"], "")
         finally:
             del os.environ["PAPER_STAGE_XAI_KEY"]
+
+
+
+class ElevenTests(unittest.TestCase):
+    def test_words_from_alignment(self):
+        text = "¿Por qué? Ya."
+        al = {"characters": list(text), "character_start_times_seconds": [i * 0.1 for i in range(len(text))],
+              "character_end_times_seconds": [i * 0.1 + 0.1 for i in range(len(text))]}
+        words = eleven.words_from_alignment(al, scene=2)
+        self.assertEqual([w["w"] for w in words], ["¿Por", "qué?", "Ya."])
+        self.assertEqual((words[1]["start"], words[1]["end"], words[1]["scene"]), (0.5, 0.9, 2))
+        self.assertEqual(eleven.words_from_alignment(None), [])
+
+    def test_key_only_goes_to_elevenlabs_and_samples_are_kept(self):
+        slug = "muestra-de-voz-es"
+        out = library.slug_dir(slug)
+        (out / "audio").mkdir(parents=True, exist_ok=True)
+        (out / "script.json").write_text(json.dumps({"escenas": [{"n": 1, "vo": "Hola, mundo."}]}), encoding="utf-8")
+        (out / "audio" / "raw_01.wav").write_bytes(b"RIFF")
+        calls = []
+        text = "Hola, mundo."
+
+        def http(method, url, headers, body, timeout):
+            calls.append((method, url, headers, body))
+            if "/v2/voices" in url:
+                return 200, json.dumps({"voices": [
+                    {"voice_id": "VozLatina01", "name": "Lucía", "category": "professional",
+                     "labels": {"gender": "female", "accent": "latin american"},
+                     "verified_languages": [{"language": "es", "model_id": "eleven_v3"}]},
+                    {"voice_id": "VozIngles001", "name": "Rachel", "category": "premade", "labels": {}}],
+                    "has_more": False}).encode()
+            if url.endswith("/v1/user/subscription"):
+                return 200, json.dumps({"tier": "starter", "character_count": 1000, "character_limit": 30000}).encode()
+            if "/with-timestamps" in url:
+                n = len(text)
+                return 200, json.dumps({"audio_base64": base64.b64encode(b"\0\0" * 2400).decode(), "alignment": {
+                    "characters": list(text), "character_start_times_seconds": [i * 0.05 for i in range(n)],
+                    "character_end_times_seconds": [i * 0.05 + 0.05 for i in range(n)]}}).encode()
+            return 404, b"{}"
+
+        manager = JobManager(TMP / "data-eleven", runner=run_demo)
+        box = eleven.ElevenLabs(manager.store.db, manager.data_dir, http=http)
+        with TestClient(create_app(manager, token="", eleven=box), base_url="http://127.0.0.1") as client:
+            self.assertEqual(client.post("/api/voz/elevenlabs/check").status_code, 409)  # sin clave
+            self.assertEqual(client.put("/api/voz/elevenlabs", json={"elevenlabs_key": "corta"}).status_code, 400)
+            res = client.put("/api/voz/elevenlabs", json={"elevenlabs_key": "sk_secreta_1234"})
+            self.assertNotIn("sk_secreta", res.text)
+            res = client.post("/api/voz/elevenlabs/check")
+            self.assertEqual(res.status_code, 200, res.text)
+            self.assertNotIn("sk_secreta", res.text)
+            check = res.json()["check"]
+            self.assertEqual(check["left"], 29000)
+            self.assertEqual(check["voices"][0]["name"], "Lucía")  # las de español, primero
+            self.assertTrue(check["voices"][0]["es"])
+            body = {"slug": slug, "scene": 1, "model": "eleven_v3", "voices": ["VozLatina01", "VozIngles001"]}
+            res = client.post("/api/voz/elevenlabs/samples", json={**body, "estimate": True})
+            self.assertEqual(res.json()["credits"], 2 * len(text))
+            self.assertFalse(any("text-to-speech" in c[1] for c in calls))  # estimar no gasta
+            res = client.post("/api/voz/elevenlabs/samples", json=body)
+            self.assertEqual(res.status_code, 200, res.text)
+            group = res.json()["samples"][0]
+            self.assertEqual((group["slug"], group["scene"], group["texto"]), (slug, 1, text))
+            self.assertEqual(group["actual"], f"/files/{slug}/audio/raw_01.wav")
+            self.assertEqual([i["name"] for i in group["items"]], ["Lucía", "Rachel"])
+            wav = client.get(group["items"][0]["url"])
+            self.assertEqual(wav.status_code, 200)
+            self.assertEqual(wav.content[:4], b"RIFF")
+            self.assertEqual(client.get(f"/voces/muestras/{slug}/01/eleven_v3/..%2F..%2Fx.wav").status_code, 404)
+            bad = {**body, "voices": ["v" * 8] * 1 + [f"Voz{i:05d}" for i in range(7)]}
+            self.assertEqual(client.post("/api/voz/elevenlabs/samples", json=bad).status_code, 409)
+            self.assertEqual(client.post("/api/voz/elevenlabs/samples", json={**body, "model": "otro"}).status_code, 409)
+        sample = manager.data_dir / "voces" / "muestras" / slug / "01" / "eleven_v3" / "VozLatina01.json"
+        self.assertEqual(json.loads(sample.read_text())["palabras"][0]["w"], "Hola,")
+        self.assertTrue(all(c[1].startswith("https://api.elevenlabs.io/") for c in calls))
+        self.assertTrue(all(c[2]["xi-api-key"] == "sk_secreta_1234" for c in calls))
+        self.assertTrue(all("Authorization" not in c[2] for c in calls))
+
+        rejected = eleven.ElevenLabs(manager.store.db, manager.data_dir, http=lambda *a: (401, b"{}"))
+        with self.assertRaisesRegex(eleven.ElevenError, "rechazó"):
+            rejected.check()
+        with self.assertRaises(eleven.ElevenError):  # el modo demo no usa la red
+            eleven.ElevenLabs(manager.store.db, manager.data_dir, demo=True, http=http).check()
+        os.environ["PAPER_STAGE_ELEVENLABS_KEY"] = "secreta"
+        try:
+            self.assertEqual(core.agent_env()["PAPER_STAGE_ELEVENLABS_KEY"], "")
+        finally:
+            del os.environ["PAPER_STAGE_ELEVENLABS_KEY"]
+
+    def test_falls_back_to_plain_audio_when_model_has_no_timestamps(self):
+        manager = JobManager(TMP / "data-eleven-2", runner=run_demo)
+        seen = []
+
+        def http(method, url, headers, body, timeout):
+            seen.append(url)
+            return (422, b'{"detail": "sin tiempos"}') if "/with-timestamps" in url else (200, b"\0\0" * 240)
+
+        box = eleven.ElevenLabs(manager.store.db, manager.data_dir, http=http)
+        box.save_config({"elevenlabs_key": "sk_otra_clave_5678"})
+        out = TMP / "eleven-fallback.wav"
+        self.assertEqual(box.synthesize("Hola.", "VozLatina01", "eleven_v3", out), [])
+        self.assertEqual(len(seen), 2)
+        self.assertAlmostEqual(library.duration(out) or 0.01, 0.01, places=2)
 
 
 class ShutdownTests(unittest.IsolatedAsyncioTestCase):

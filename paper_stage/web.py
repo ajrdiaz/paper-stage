@@ -24,6 +24,7 @@ from . import core, library
 from .jobs import TERMINAL, JobManager
 from .publishing import TEST_SLUG, PublishError, PublishRequest, Publisher, default_text, text_units
 from .dramas import DramaError, Dramas
+from .eleven import ElevenError, ElevenLabs
 from .radar import Radar, RadarError
 from .review import review_video, set_discarded
 
@@ -112,7 +113,7 @@ class TokenAuth(BaseHTTPMiddleware):
 def create_app(manager: JobManager | None = None, token: str | None = None,
                suggester: Callable | None = None,
                publisher: Publisher | None = None, radar: Radar | None = None,
-               dramas: Dramas | None = None) -> Starlette:
+               dramas: Dramas | None = None, eleven: ElevenLabs | None = None) -> Starlette:
     if manager is None:
         runner = None
         if os.environ.get("PAPER_STAGE_DEMO") == "1":
@@ -143,6 +144,8 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         radar = Radar(manager.store.db, manager.data_dir, used_topics=manager.used_topics, **parts)
     if dramas is None:
         dramas = Dramas(manager.store.db, demo=demo)
+    if eleven is None:
+        eleven = ElevenLabs(manager.store.db, manager.data_dir, demo=demo)
     manager.source_texts = radar.transcripts
     if manager.reviewer is None:
         if demo:
@@ -441,6 +444,44 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             return _error(str(exc), 409)
         return JSONResponse(dramas.config())
 
+    # ------------------------------------------------------------------ voz con ElevenLabs
+
+    async def eleven_config(request: Request):
+        return JSONResponse(eleven.config())
+
+    async def save_eleven(request: Request):
+        try:
+            return JSONResponse(eleven.save_config(await _json(request)))
+        except (ElevenError, ValueError) as exc:
+            return _error(str(exc))
+
+    async def check_eleven(request: Request):
+        try:
+            await asyncio.to_thread(eleven.check)
+        except ElevenError as exc:
+            return _error(str(exc), 409)
+        return JSONResponse(eleven.config())
+
+    async def eleven_samples(request: Request):
+        """Gasta créditos: la interfaz muestra antes el costo estimado y pide confirmación."""
+        try:
+            data = await _json(request)
+            slug, model = str(data.get("slug", "")), str(data.get("model", ""))
+            scene, voices = int(data.get("scene", 1)), [str(v) for v in data.get("voices") or []]
+            if data.get("estimate"):
+                return JSONResponse({"credits": eleven.estimate(slug, scene, voices, model)})
+            result = await asyncio.to_thread(eleven.make_samples, slug, scene, voices, model)
+        except (ValueError, TypeError) as exc:
+            return _error(str(exc) or "Datos no válidos.")
+        except ElevenError as exc:
+            return _error(str(exc), 409)
+        return JSONResponse({**eleven.config(), "result": result})
+
+    async def eleven_sample_file(request: Request):
+        p = request.path_params
+        path = eleven.sample_path(p["slug"], p["scene"], p["model"], p["voice"])
+        return FileResponse(path, media_type="audio/wav") if path else _error("Muestra no encontrada.", 404)
+
     # ------------------------------------------------------------------ radar
 
     async def radar_overview(request: Request):
@@ -609,6 +650,11 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Route("/api/dramas", dramas_config),
         Route("/api/dramas", save_dramas, methods=["PUT"]),
         Route("/api/dramas/check", check_dramas, methods=["POST"]),
+        Route("/api/voz/elevenlabs", eleven_config),
+        Route("/api/voz/elevenlabs", save_eleven, methods=["PUT"]),
+        Route("/api/voz/elevenlabs/check", check_eleven, methods=["POST"]),
+        Route("/api/voz/elevenlabs/samples", eleven_samples, methods=["POST"]),
+        Route("/voces/muestras/{slug}/{scene}/{model}/{voice}.wav", eleven_sample_file),
         Route("/api/publishing", publishing_config),
         Route("/api/publishing", save_publishing, methods=["PUT"]),
         Route("/api/publishing/channels", publishing_channels),

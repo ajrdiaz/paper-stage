@@ -1257,9 +1257,11 @@ async function renderSystem() {
     <section class="card stack" id="about"></section></div>`;
   view.insertAdjacentHTML("beforeend", `<section class="card stack" id="radar-setup" style="margin-top:24px"></section>
     <section class="card stack" id="publishing" style="margin-top:24px"></section>
+    <section class="card stack" id="voz-setup" style="margin-top:24px"></section>
     <section class="card stack" id="dramas-setup" style="margin-top:24px"></section>`);
   mountRadarSetup($("#radar-setup"));
   mountPublishingSetup($("#publishing"));
+  mountVoiceSetup($("#voz-setup"));
   mountDramasSetup($("#dramas-setup"));
   const health = await api("/api/health");
   const group = (kind, title) => `<h2>${title}</h2><ul class="checklist">${health.items.filter(i => i.kind === kind).map(i => `
@@ -1825,6 +1827,122 @@ async function mountRadarSetup(box) {
     if (ev.target.id !== "apify-save") return;
     try { data = await api("/api/radar/config", { method: "PUT", body: { apify_token: $("#apify-key", box).value } }); draw(); toast("Guardado.", "ok"); }
     catch (err) { $("#apify-error", box).textContent = err.message; }
+  });
+}
+
+// Voz con ElevenLabs (en prueba): la clave y muestras de una escena ya hecha con varias voces, junto a la voz actual,
+// para elegir de oído. Claude no puede oír: aquí no se cambia la voz de ninguna serie.
+async function mountVoiceSetup(box) {
+  let cfg = await api("/api/voz/elevenlabs");
+  const videos = (await api("/api/videos")).filter(v => v.idioma === "es" && v.has_video);
+  const prefs = loadPrefs().vozMuestras || {};
+  const voiceLabel = v => [v.gender === "female" ? "mujer" : v.gender === "male" ? "hombre" : v.gender, v.accent, v.age]
+    .filter(Boolean).join(" · ").replaceAll("_", " ");
+  const sampleBlock = g => {
+    const video = videos.find(v => v.slug === g.slug);
+    return `<div class="stack voice-samples">
+      <div><strong>${esc(video?.title || g.slug)}</strong> <span class="small muted">· escena ${g.scene}</span></div>
+      ${g.texto ? `<p class="small muted">«${esc(g.texto)}»</p>` : ""}
+      ${g.actual ? `<div class="voice-sample"><span><strong>Voz actual</strong> <span class="small muted">Chatterbox</span></span>
+        <audio controls preload="none" src="${esc(g.actual)}"></audio></div>` : ""}
+      ${g.items.map(i => `<div class="voice-sample"><span><strong>${esc(i.name)}</strong> <span class="small muted">${esc(i.model_name)}</span></span>
+        <audio controls preload="none" src="${esc(i.url)}"></audio></div>`).join("")}
+    </div>`;
+  };
+  const draw = () => {
+    const check = cfg.check;
+    const voices = check?.voices || [];
+    const chosen = new Set(prefs.voices || []);
+    box.innerHTML = `
+      <div class="row"><h2>Voz con ElevenLabs (en prueba)</h2><span class="spacer"></span>
+        ${check ? `<span class="pill ${check.ok ? "done" : "failed"}">${check.ok ? "Conectado" : "Sin voces"}</span>` : ""}</div>
+      <p class="small muted">Genera la misma escena de un video ya hecho con varias voces, para compararlas con la actual y
+        elegir de oído. Comprobar el acceso no gasta créditos; cada muestra gasta alrededor de 1 crédito por carácter.
+        Por ahora no cambia la voz de ninguna serie.</p>
+      ${cfg.demo ? `<p class="small">En modo demo no se usa la API de ElevenLabs.</p>` : `
+      <div class="field"><label for="el-key">Clave de API de ElevenLabs</label>
+        <div class="row"><input type="password" id="el-key" autocomplete="off"
+            placeholder="${cfg.key ? `Guardada (${esc(cfg.key_hint)})` : "Pega aquí tu clave"}" ${cfg.key_env ? "disabled" : ""}>
+          <button type="button" class="btn small" id="el-save" ${cfg.key_env ? "disabled" : ""}>Guardar</button></div>
+        <span class="hint">${cfg.key_env ? "Viene de la variable PAPER_STAGE_ELEVENLABS_KEY." :
+          `Créala en <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">elevenlabs.io → API Keys</a>
+          con permiso de Text to Speech y de lectura de Voices (y de User, para ver los créditos). Se guarda solo en este
+          equipo, en data/, y solo se envía a api.elevenlabs.io.`}</span></div>
+      <div class="row"><button type="button" class="btn" id="el-check" ${cfg.key ? "" : "disabled"}>Comprobar acceso</button>
+        <span class="small muted" id="el-status">${check ? esc(check.message) : ""}</span></div>`}
+      <p id="el-error" class="small" style="color:var(--warn)" role="alert"></p>
+      ${check?.ok && !cfg.demo ? `
+      <h3>Generar muestras</h3>
+      <div class="row voice-form">
+        <div class="field grow"><label for="el-video">Video</label>
+          <select id="el-video">${videos.map(v => `<option value="${esc(v.slug)}" ${v.slug === prefs.slug ? "selected" : ""}>${esc(v.title)}</option>`).join("")}</select></div>
+        <div class="field"><label for="el-scene">Escena</label>
+          <select id="el-scene">${[1, 2, 3, 4, 5, 6, 7].map(n => `<option ${n === (prefs.scene || 1) ? "selected" : ""}>${n}</option>`).join("")}</select></div>
+        <div class="field"><label for="el-model">Modelo</label>
+          <select id="el-model">${cfg.models.map(m => `<option value="${m.id}" ${m.id === (prefs.model || "eleven_v3") ? "selected" : ""}>${esc(m.name)}${m.credits < 1 ? " (mitad de créditos)" : ""}</option>`).join("")}</select></div>
+      </div>
+      <div class="field"><span class="label">Voces (hasta ${cfg.max_voices})</span>
+        <span class="hint">Las voces en español y con acento latino de la biblioteca de ElevenLabs hay que añadirlas antes a
+          «My Voices» en su web; luego pulsa otra vez «Comprobar acceso». ▶ reproduce la muestra de ElevenLabs, que es gratis.</span>
+        <div class="voice-list">${voices.map(v => `
+          <label class="voice-option"><input type="checkbox" name="el-voice" value="${esc(v.id)}" ${chosen.has(v.id) ? "checked" : ""}>
+            <span class="grow"><strong>${esc(v.name)}</strong>${v.es ? ` <span class="pill plain">español</span>` : ""}
+              <span class="small muted">${esc(voiceLabel(v))}</span></span>
+            ${v.preview_url ? `<button type="button" class="btn small" data-preview="${esc(v.preview_url)}" aria-label="Escuchar ${esc(v.name)}">▶</button>` : ""}
+          </label>`).join("")}</div></div>
+      <div class="row"><button type="button" class="btn primary" id="el-make">Generar muestras</button>
+        <span class="small muted" id="el-make-status"></span></div>` : ""}
+      ${cfg.samples.length ? `<h3>Muestras para escuchar</h3>
+        <p class="small muted">Escúchalas con audífonos y dime cuál te gusta: la elección de la voz es tuya.</p>
+        ${cfg.samples.map(sampleBlock).join("")}` : ""}`;
+  };
+  draw();
+  let player = null;
+  const form = () => {
+    const values = { slug: $("#el-video", box)?.value, scene: Number($("#el-scene", box)?.value || 1),
+      model: $("#el-model", box)?.value, voices: $$("input[name=el-voice]:checked", box).map(i => i.value) };
+    Object.assign(prefs, values);
+    savePrefs({ ...loadPrefs(), vozMuestras: values });
+    return values;
+  };
+  box.addEventListener("change", ev => { if (ev.target.closest("#el-video, #el-scene, #el-model, .voice-list")) form(); });
+  box.addEventListener("click", async ev => {
+    const preview = ev.target.closest("[data-preview]");
+    if (preview) {
+      ev.preventDefault();
+      player?.pause();
+      player = new Audio(preview.dataset.preview);
+      player.play().catch(() => toast("No se pudo reproducir la muestra.", "err"));
+      return;
+    }
+    const id = ev.target.id;
+    if (!["el-save", "el-check", "el-make"].includes(id)) return;
+    $("#el-error", box).textContent = "";
+    try {
+      if (id === "el-save") {
+        cfg = await api("/api/voz/elevenlabs", { method: "PUT", body: { elevenlabs_key: $("#el-key", box).value } });
+        toast("Guardado.", "ok");
+      } else if (id === "el-check") {
+        ev.target.disabled = true;
+        $("#el-status", box).textContent = "Comprobando…";
+        cfg = await api("/api/voz/elevenlabs/check", { method: "POST" });
+      } else {
+        const body = form();
+        if (!body.voices.length) throw new Error("Elige al menos una voz.");
+        if (body.voices.length > cfg.max_voices) throw new Error(`Como mucho ${cfg.max_voices} voces por tanda.`);
+        const { credits } = await api("/api/voz/elevenlabs/samples", { method: "POST", body: { ...body, estimate: true } });
+        const left = cfg.check?.left;
+        if (!confirmAction(`Se generarán ${body.voices.length} muestra(s) y gastarán unos ${credits} créditos`
+          + `${left != null ? ` (te quedan ${left})` : ""}. ¿Seguir?`)) return;
+        ev.target.disabled = true;
+        $("#el-make-status", box).innerHTML = `<span class="spinner" aria-hidden="true"></span> Generando… unos segundos por voz.`;
+        cfg = await api("/api/voz/elevenlabs/samples", { method: "POST", body });
+        toast(`${cfg.result.made.length} muestra(s) listas para escuchar.`, "ok");
+        // Los créditos cambiaron: se vuelve a leer el plan (no gasta).
+        cfg = await api("/api/voz/elevenlabs/check", { method: "POST" }).catch(() => cfg);
+      }
+      draw();
+    } catch (err) { draw(); $("#el-error", box).textContent = err.message; }
   });
 }
 
