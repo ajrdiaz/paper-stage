@@ -309,7 +309,8 @@ def script_serie(script: dict | None) -> str:
     return slugify(str(value)) if value else DEFAULT_SERIE.id
 
 
-def _serious_suggestions(out_dir: Path) -> int:
+def serious_suggestions(out_dir: Path) -> int:
+    """Correcciones importantes de la revisión que no se aplicaron ni se descartaron: con alguna, no se publica."""
     review = read_json(out_dir / "revision.json")
     return sum(s.get("gravedad") == "alta" and not s.get("descartada") for s in review.get("sugerencias", [])) if isinstance(review, dict) else 0
 
@@ -333,7 +334,7 @@ def summary(out_dir: Path) -> dict:
         "steps_done": sum(s["done"] for s in steps),
         "steps_total": len(steps),
         "qa": qa_summary(out_dir),
-        "revision_altas": _serious_suggestions(out_dir),
+        "revision_altas": serious_suggestions(out_dir),
         "verify": verify(out_dir, compute=False),
         "updated": max((p.stat().st_mtime for p in out_dir.iterdir()), default=out_dir.stat().st_mtime),
     }

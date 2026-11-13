@@ -25,7 +25,7 @@ from paper_stage import core, library  # noqa: E402
 from paper_stage.demo import (LINES, analyze_demo, demo_account_search, demo_radar_source,  # noqa: E402
                               find_niches_demo, make_ideas_demo, run_demo)
 from paper_stage.jobs import JobManager  # noqa: E402
-from paper_stage import publishing, radar, review  # noqa: E402
+from paper_stage import dramas, publishing, radar, review  # noqa: E402
 
 # Las pruebas nunca deben escribir en el Google Drive real de quien las ejecuta.
 publishing.drive_roots = lambda: []
@@ -499,6 +499,12 @@ class AppTests(unittest.TestCase):
             info = client.get(f"/api/videos/{job['slug']}/publish").json()
             self.assertEqual(info["channel"]["id"], channels[0]["id"])
             self.assertIn("#", info["default_text"])
+            # Con una corrección importante sin resolver tampoco: el revisor demo deja una.
+            self.assertEqual(info["pendientes"], 1)
+            res = client.post(f"/api/videos/{job['slug']}/publish", json={"text": info["default_text"], "mode": "now"})
+            self.assertIn("corrección", res.json()["error"])
+            pending = next(s for s in client.get(f"/api/videos/{job['slug']}").json()["revision"]["sugerencias"] if s["gravedad"] == "alta")
+            client.post(f"/api/videos/{job['slug']}/review/{pending['id']}/discard", json={"descartada": True})
             res = client.post(f"/api/videos/{job['slug']}/publish", json={"text": info["default_text"], "mode": "now"})
             self.assertEqual(res.status_code, 200, res.text)
             deadline = time.time() + 20
@@ -622,6 +628,21 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(publishing.public_url("X"),
                          "https://drive.usercontent.google.com/download?id=X&export=download&confirm=t")
 
+    async def test_serious_corrections_block_publishing(self):
+        out = core.OUTPUT_DIR / self.slug
+        (out / "revision.json").write_text(json.dumps({"sugerencias": [
+            {"id": "s1", "gravedad": "alta", "problema": "x"}, {"id": "s2", "gravedad": "media", "problema": "y"}]}), encoding="utf-8")
+        try:
+            pub = self.publisher(FakeNet())
+            req = publishing.PublishRequest(text="Hola #a", mode="schedule", due_at="2026-10-01T15:00:00Z")
+            with self.assertRaisesRegex(publishing.PublishError, "1 corrección"):
+                pub.start(self.slug, req)
+            review.set_discarded(out, "s1", True)  # una falsa alarma descartada ya no bloquea
+            pub.start(self.slug, req)
+            self.assertEqual((await self.finish(pub, self.slug))["state"], "done")
+        finally:
+            (out / "revision.json").unlink()
+
     async def test_publish_flow(self):
         net = FakeNet()
         pub = self.publisher(net)
@@ -638,6 +659,7 @@ class PublishingTests(unittest.IsolatedAsyncioTestCase):
             "url": publishing.public_url("ID123"), "metadata": {"thumbnailOffset": 1500}})
         self.assertTrue(post["metadata"]["tiktok"]["isAiGenerated"])
         self.assertEqual(pub.history(self.slug)[0]["post_id"], "p1")
+        self.assertEqual([(u["slug"], u["due_at"]) for u in pub.upcoming()], [(self.slug, "2026-10-01T15:00:00Z")])
         # No se envía dos veces sin confirmarlo.
         with self.assertRaises(publishing.PublishError):
             pub.start(self.slug, publishing.PublishRequest(text="Hola"))
@@ -791,6 +813,12 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(review.compare_speech("de cinco a treinta veces, a quien le ruge en cada junta",
                                                self.heard("de 5 a 30 veces a quien le rujen cada junta")), [])
         self.assertEqual(review.compare_speech("sobra piel", self.heard("sobre piel"))[0]["esperado"], "sobra")  # esto sí es distinto
+        # En el español de América b/v, s/c/z y ll/y suenan igual, y la h no suena: Whisper elige una grafía al azar.
+        for said, heard in [("Y se hereda.", "Y cereda"), ("los vasitos", "los vacitos"), ("el vello", "el bello"),
+                            ("hay quien ve estas luces", "hay quien bestas luces")]:
+            self.assertEqual(review.compare_speech(said, self.heard(heard)), [], said)
+        for said, heard in [("quien la muerde", "quien la mueve"), ("no los congelaba", "no nos congelaba"), ("el chico", "el quico")]:
+            self.assertTrue(review.compare_speech(said, self.heard(heard)), said)
         # Falsos avisos graves del video de la melaza: números de varias palabras y miles separados.
         self.assertEqual(review.compare_speech("eran doce mil toneladas en mil novecientos diecinueve, a cincuenta y seis por hora",
                                                self.heard("eran 12 .000 toneladas en 1919. a 56 por hora")), [])
@@ -1321,6 +1349,46 @@ class RadarApiTests(unittest.TestCase):
             self.assertFalse(path.exists())
             radar._save_cover(path, "https://cdn.example/c.jpg", lambda *a: (200, b"\xff\xd8\xffdatos"))
             self.assertTrue(path.exists())
+
+
+class DramaTests(unittest.TestCase):
+    def test_xai_key_only_goes_to_xai_and_never_back(self):
+        calls = []
+
+        def http(method, url, headers, body, timeout):
+            calls.append((method, url, headers))
+            if url.endswith("/video-generation-models"):
+                return 404, b"{}"
+            return 200, json.dumps({"data": [{"id": "grok-4"}, {"id": "grok-imagine-video-1.5"}]}).encode()
+
+        manager = JobManager(TMP / "data-dramas", runner=run_demo)
+        box = dramas.Dramas(manager.store.db, http=http)
+        with TestClient(create_app(manager, token="", dramas=box), base_url="http://127.0.0.1") as client:
+            self.assertEqual(client.post("/api/dramas/check").status_code, 409)  # sin clave
+            self.assertEqual(client.put("/api/dramas", json={"xai_key": "corta"}).status_code, 400)
+            res = client.put("/api/dramas", json={"xai_key": "xai-secreta-1234"})
+            self.assertNotIn("xai-secreta", res.text)
+            self.assertEqual(res.json()["xai_key_hint"], "…1234")
+            res = client.post("/api/dramas/check")
+            self.assertEqual(res.status_code, 200, res.text)
+            self.assertNotIn("xai-secreta", res.text)
+            self.assertEqual(res.json()["check"]["video_models"], ["grok-imagine-video-1.5"])
+            self.assertTrue(client.get("/api/dramas").json()["check"]["ok"])
+            # Otra clave borra la comprobación anterior.
+            self.assertIsNone(client.put("/api/dramas", json={"xai_key": "xai-otra-clave-99"}).json()["check"])
+        self.assertTrue(calls and all(m == "GET" and u.startswith("https://api.x.ai/") for m, u, _ in calls))
+        self.assertEqual(calls[0][2]["Authorization"], "Bearer xai-secreta-1234")
+
+        rejected = dramas.Dramas(manager.store.db, http=lambda *a: (401, b"{}"))
+        with self.assertRaisesRegex(dramas.DramaError, "rechazó"):
+            rejected.check()
+        with self.assertRaises(dramas.DramaError):  # el modo demo no usa la red
+            dramas.Dramas(manager.store.db, demo=True, http=http).check()
+        os.environ["PAPER_STAGE_XAI_KEY"] = "secreta"
+        try:
+            self.assertEqual(core.agent_env()["PAPER_STAGE_XAI_KEY"], "")
+        finally:
+            del os.environ["PAPER_STAGE_XAI_KEY"]
 
 
 class ShutdownTests(unittest.IsolatedAsyncioTestCase):

@@ -62,6 +62,10 @@ _REMATE = ("Una frase memorable que vuelve a la imagen del inicio, para que el l
 _GANCHO = ("Una frase de 3 s de voz como máximo, de uno de los tipos de abajo. La voz empieza en ≤0.3 s, hay movimiento desde el frame 1 y el "
            "gancho va también **escrito** en pantalla (`texto_gancho`, §7), porque muchos ven TikTok sin sonido. El espectador debe "
            "reconocerse: algo que le ha pasado a él o a alguien cercano.")
+# Fórmulas fijas como "lo más raro viene ahora" se repetían en todos los videos: cada tema promete lo suyo.
+_BUCLE = ("una promesa propia de este tema, que nombra la pieza que falta de la explicación sin revelarla. "
+          "Nada de fórmulas genéricas como \"lo más raro viene ahora\", ni la misma frase de los videos anteriores.")
+_GIRO = "Entra directo con el dato: sin anunciarlo con \"Lo raro:\" o \"Lo más raro:\"."
 _MECANISMO = "Lo invisible hecho visible: la escena más larga y la más espectacular. Es lo que hace que el video se vea dos veces."
 # Corta: la de por defecto, sin requisito de minutos. Larga: Creator Rewards pide más de un minuto.
 DURATIONS = {
@@ -70,9 +74,9 @@ DURATIONS = {
         "estructura": f"""| # | Tiempo aprox. | Escena | Función |
 |---|---|---|---|
 | 1 | 0–4 s | **El gancho** | {_GANCHO} |
-| 2 | 4–13 s | **Lo que todos creen y lo que pasa** | La explicación popular, su desmentido y la causa real, con una analogía de un objeto cotidiano que se ve en pantalla. **Bucle abierto:** "…y lo más raro viene ahora". |
+| 2 | 4–13 s | **Lo que todos creen y lo que pasa** | La explicación popular, su desmentido y la causa real, con una analogía de un objeto cotidiano que se ve en pantalla. **Bucle abierto:** {_BUCLE} |
 | 3 | 13–25 s | **El mecanismo por dentro** | {_MECANISMO} |
-| 4 | 25–36 s | **El giro** | El dato que sorprende, respaldado en `research.md`, que cierra el bucle abierto con el clímax visual y musical. |
+| 4 | 25–36 s | **El giro** | El dato que sorprende, respaldado en `research.md`, que cierra el bucle abierto con el clímax visual y musical. {_GIRO} |
 | 5 | 36–45 s | **El remate** | {_REMATE} |
 
 En tan poco tiempo no cabe nada de relleno: una sola idea, una sola analogía y un solo dato.""",
@@ -82,11 +86,11 @@ En tan poco tiempo no cabe nada de relleno: una sola idea, una sola analogía y 
         "estructura": f"""| # | Tiempo aprox. | Escena | Función |
 |---|---|---|---|
 | 1 | 0–5 s | **El gancho** | {_GANCHO} |
-| 2 | 5–14 s | **Lo que todos creen** | La explicación popular, y su desmentido. **Bucle abierto:** "…y lo más raro es lo que pasa al final". |
+| 2 | 5–14 s | **Lo que todos creen** | La explicación popular, y su desmentido. **Bucle abierto:** {_BUCLE} |
 | 3 | 14–26 s | **Qué pasa de verdad** | La causa real, con una analogía de un objeto cotidiano que se ve en pantalla. |
 | 4 | 26–40 s | **El mecanismo por dentro** | {_MECANISMO} |
-| 5 | 40–50 s | **El dato que sorprende** | Una cifra o una comparación concreta, respaldada en `research.md`. Micro-gancho: "Y aquí viene lo mejor…" |
-| 6 | 50–60 s | **El giro** | Cierra el bucle abierto de la escena 2 con el clímax visual y musical. Por qué esto le importa al espectador. |
+| 5 | 40–50 s | **El dato que sorprende** | Una cifra o una comparación concreta, respaldada en `research.md`. Micro-gancho propio del tema, no una fórmula. |
+| 6 | 50–60 s | **El giro** | Cierra el bucle abierto de la escena 2 con el clímax visual y musical. {_GIRO} Por qué esto le importa al espectador. |
 | 7 | 60–70 s | **El remate** | {_REMATE} |""",
     },
 }
@@ -101,7 +105,7 @@ AGENT_ENV = {
     "BASH_MAX_TIMEOUT_MS": str(2 * 60 * 60 * 1000),
 }
 DISALLOWED_TOOLS = ["ScheduleWakeup", "Monitor", "CronCreate", "RemoteTrigger"]
-SECRET_ENV = ["PAPER_STAGE_TOKEN", "PAPER_STAGE_BUFFER_KEY", "PAPER_STAGE_APIFY_TOKEN"]
+SECRET_ENV = ["PAPER_STAGE_TOKEN", "PAPER_STAGE_BUFFER_KEY", "PAPER_STAGE_APIFY_TOKEN", "PAPER_STAGE_XAI_KEY"]
 
 
 def agent_env() -> dict[str, str]:

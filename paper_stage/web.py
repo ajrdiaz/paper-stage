@@ -23,6 +23,7 @@ from starlette.staticfiles import StaticFiles
 from . import core, library
 from .jobs import TERMINAL, JobManager
 from .publishing import TEST_SLUG, PublishError, PublishRequest, Publisher, default_text, text_units
+from .dramas import DramaError, Dramas
 from .radar import Radar, RadarError
 from .review import review_video, set_discarded
 
@@ -110,7 +111,8 @@ class TokenAuth(BaseHTTPMiddleware):
 
 def create_app(manager: JobManager | None = None, token: str | None = None,
                suggester: Callable | None = None,
-               publisher: Publisher | None = None, radar: Radar | None = None) -> Starlette:
+               publisher: Publisher | None = None, radar: Radar | None = None,
+               dramas: Dramas | None = None) -> Starlette:
     if manager is None:
         runner = None
         if os.environ.get("PAPER_STAGE_DEMO") == "1":
@@ -139,6 +141,8 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             from .demo import demo_radar_parts
             parts = demo_radar_parts()
         radar = Radar(manager.store.db, manager.data_dir, used_topics=manager.used_topics, **parts)
+    if dramas is None:
+        dramas = Dramas(manager.store.db, demo=demo)
     manager.source_texts = radar.transcripts
     if manager.reviewer is None:
         if demo:
@@ -347,6 +351,17 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         except (PublishError, ValueError, OSError) as exc:
             return _error(str(exc))
 
+    async def publishing_schedule(request: Request):
+        """Lo programado en Buffer, con su título y las correcciones importantes que aún tenga."""
+        items = []
+        for item in publisher.upcoming():
+            out_dir = library.slug_dir(item["slug"])
+            script = library.read_json(out_dir / "script.json")
+            script = script if isinstance(script, dict) else {}
+            items.append({**item, "titulo": str(script.get("titulo") or item["slug"]), "serie": library.script_serie(script),
+                          "pendientes": library.serious_suggestions(out_dir)})
+        return JSONResponse(items)
+
     async def publishing_channels(request: Request):
         try:
             return JSONResponse(await publisher.channels())
@@ -386,7 +401,8 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             text = default_text(publish if isinstance(publish, dict) else {})
             serie, channel = publisher.video_channel(slug)
             return JSONResponse({**publisher.state(slug), "default_text": text, "serie": serie, "channel": channel,
-                                 "default_units": text_units(text), "config": publisher.config()})
+                                 "default_units": text_units(text), "config": publisher.config(),
+                                 "pendientes": library.serious_suggestions(library.slug_dir(slug))})
         try:
             payload = await _json(request)
             req = PublishRequest(text=str(payload.get("text") or ""), mode=str(payload.get("mode") or "queue"),
@@ -406,6 +422,24 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
             return _error("Video no válido.", 400)
         except PublishError as exc:
             return _error(str(exc), 409)
+
+    # ------------------------------------------------------------------ minidramas (xAI)
+
+    async def dramas_config(request: Request):
+        return JSONResponse(dramas.config())
+
+    async def save_dramas(request: Request):
+        try:
+            return JSONResponse(dramas.save_config(await _json(request)))
+        except (DramaError, ValueError) as exc:
+            return _error(str(exc))
+
+    async def check_dramas(request: Request):
+        try:
+            await asyncio.to_thread(dramas.check)
+        except DramaError as exc:
+            return _error(str(exc), 409)
+        return JSONResponse(dramas.config())
 
     # ------------------------------------------------------------------ radar
 
@@ -572,11 +606,15 @@ def create_app(manager: JobManager | None = None, token: str | None = None,
         Route("/api/videos/{slug}/publish", video_publish, methods=["GET", "POST"]),
         Route("/api/videos/{slug}/publish/manual", video_mark_published, methods=["POST"]),
         Route("/api/videos/{slug}/publish/{pub_id:int}", video_mark_published, methods=["DELETE"]),
+        Route("/api/dramas", dramas_config),
+        Route("/api/dramas", save_dramas, methods=["PUT"]),
+        Route("/api/dramas/check", check_dramas, methods=["POST"]),
         Route("/api/publishing", publishing_config),
         Route("/api/publishing", save_publishing, methods=["PUT"]),
         Route("/api/publishing/channels", publishing_channels),
         Route("/api/publishing/channels/{serie_id}", serie_channel, methods=["PUT"]),
         Route("/api/publishing/test", publishing_test, methods=["GET", "POST"]),
+        Route("/api/publishing/schedule", publishing_schedule),
         Route("/api/radar", radar_overview),
         Route("/api/radar/config", _radar_action(_radar_config), methods=["PUT"]),
         Route("/api/radar/accounts", _radar_action(_radar_add), methods=["POST"]),

@@ -33,7 +33,7 @@ Todo lo visible y audible va en `{{IDIOMA}}`. Si generas la versión `en` de un 
 7. **Animación**: una sola página `stage.html` autocontenida (HTML + SVG/Canvas + JS, sin CDNs) con un reloj determinista (§7).
 8. **Audio**: música y efectos generados por código (§8) → `music.wav` y `sfx.wav`. Mezcla final → `mix.wav` (−14 LUFS).
 9. **QA previo** (§10) → `qa_previo.md`: todo lo que se puede comprobar sin el video final. Corrige lo que falle **antes** de renderizar: un error aquí cuesta minutos; después del render, un render entero.
-10. **Render**: Playwright + Chromium headless captura `stage.html` frame a frame → ffmpeg → `final.mp4`.
+10. **Render**: `scripts/render_stage.py` (§7) captura `stage.html` frame a frame y codifica `final.mp4`.
 11. **Publicación** → `publish.json` (§11).
 12. **QA final** (§10) → `qa.md`: lo técnico de `final.mp4`, una revisión visual rápida y `publish.json`. Si algo falla, corrige solo lo necesario (volver a codificar o a mezclar no exige volver a capturar los frames).
 
@@ -129,7 +129,9 @@ Todo el video es un solo movimiento de cámara continuo: entra en un objeto y sa
 
 - El motor es el que indica el §0. **Fallback: Kokoro-82M**, ya instalado.
 - **La voz debe sonar fluida: genera cada escena de una sola vez**, con todo su texto, para que el TTS enlace las frases con su entonación natural. Nunca sintetices frase por frase ni pegues frases con pausas añadidas: suena entrecortado. Las pausas salen de la puntuación. No recortes dentro de la escena: en sus extremos, solo el silencio real con un umbral muy bajo, porque recortar se come vocales iniciales ("Etiqueta" sonó "Tiqueta"). Añade 80–150 ms al final de cada escena.
-- **No puedes oír el audio: compruébalo transcribiendo.** Pasa cada WAV por `faster-whisper` sin prompt y compara palabra por palabra con la línea del guion. Si una palabra sale distinta, se pronuncia mal o se corta: cambia su grafía solo en el texto que va al TTS o reordena la frase, y repite hasta que coincidan.
+- **Cuenta las palabras antes de generar la voz**, con el texto que va al TTS en `output/{{SLUG}}/audio/lista_voz.json` (con Kokoro, escribe la misma lista): `.venv/bin/python scripts/revisar_voz.py output/{{SLUG}}/audio/lista_voz.json --max-palabras <máximo de la tabla del §0> --solo-contar`. Si sobran, acorta ahora: regenerar la voz por una palabra de más cuesta minutos.
+- **No puedes oír el audio: compruébalo transcribiendo.** Después de generarla, `.venv/bin/python scripts/revisar_voz.py output/{{SLUG}}/audio/lista_voz.json` transcribe cada WAV con `faster-whisper` y la compara con su texto igual que la revisión de la app (entiende números y guiones). Si una escena no coincide, se pronuncia mal o se corta: cambia su grafía solo en el texto que va al TTS o reordena la frase, y regenera **solo esas escenas, todas en una misma ejecución**.
+- **Dos rondas de regeneración como máximo.** Cada escena tarda unos 2 minutos, y Whisper también se equivoca: junta vocales de palabras vecinas o escribe en inglés palabras como «exprés». Si tras dos rondas queda alguna diferencia, quédate con la toma más fiel, anótala en `qa.md` con su segundo y sigue: la revisión de la app la vuelve a marcar y el usuario la escucha.
 - Si hace falta ajustar el tono: `rubberband=pitch=…` (fallback: `asetrate` + `atempo`). No pases de 1.05 ni bajes de 0.95.
 - Escribe cifras y siglas como se dicen ("mil novecientos setenta y cuatro"), y los nombres propios extranjeros con la ortografía que el TTS pronuncia bien (solo en el texto que va al TTS; en los subtítulos, la ortografía correcta).
 
@@ -146,7 +148,7 @@ Todo el video es un solo movimiento de cámara continuo: entra en un objeto y sa
   - `new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true })`, con `setPixelRatio(1)`. Nunca `setAnimationLoop` ni `THREE.Clock`: `renderAt(t)` coloca todo en función de `t` y llama una vez a `renderer.render(scene, camera)`. El texto y los subtítulos van en HTML encima del canvas.
   - Sin modelos externos: construye la geometría por código (`LatheGeometry`, `TubeGeometry`, `CapsuleGeometry`, `ExtrudeGeometry` y superficies a medida) con muchos segmentos, para que las formas sean orgánicas y no un cilindro con esferas. **Nunca construyas una figura humana con cápsulas, esferas o tubos: parece un muñeco articulado.** Si sale una persona, usa `assets/modelos/cuerpo-torso.js` (humano de una sola superficie, de cintura para arriba y con los brazos abajo; licencia CC0): incrusta su contenido en un `<script>`, después de Three.js, y `const geo = window.CUERPO_TORSO(THREE)` da la geometría: 0.82 de alto desde la cintura (origen) hasta la cabeza, con las manos por debajo del origen, mirando a +Z. Aplícale el material fresnel y coloca los órganos dentro. Encuádralo de manera que no se vea el corte inferior. Si el plano no necesita una persona entera, mejor un primer plano del órgano o del objeto, y no añadas muebles ni escenarios transparentes que se confundan con el cuerpo. Una mano suelta u otra parte hecha por código debe ser una sola pieza, sin huecos ni uniones visibles, y con vasos y nervios que continúan sin cortarse. Comprueba las proporciones desde varios ángulos. Para lo translúcido, un `ShaderMaterial` con efecto fresnel y mezcla aditiva da mejor resultado que `transmission`, que es muy lento.
   - Luz, niebla (`FogExp2`), partículas con PRNG con semilla y una cámara que se mueve siempre: entra en el objeto y sale por el siguiente. Cada plano debe leerse nítido: usa poco desenfoque y, al entrar en algo, deja claro qué se ve y rotúlalo. Antes de animar nada, renderiza un fotograma, **míralo** y mejora la forma hasta que se vea profesional.
-  - Abre la página con WebGL por software: `p.chromium.launch(args=["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"])`, tanto para las muestras como para el render. Es lento: mide un fotograma antes de render y baja la complejidad si tarda más de 3 s.
+  - Abre la página con WebGL en la GPU del Mac: `p.chromium.launch(args=["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"])`, para las muestras (el render lo hace `scripts/render_stage.py`). Comprueba una vez que el renderer de WebGL (`WEBGL_debug_renderer_info`) dice «Metal»; si no hay GPU, usa WebGL por software (`["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]`), unas 2,5 veces más lento. **Con la GPU, algunos shaders pintan cuadros negros** que por software no salen; suele ser un NaN: no normalices vectores que pueden ser nulos, no uses `pow` con base negativa ni dividas por algo que puede ser cero. Si una muestra sale con un cuadro negro, es eso: corrígelo en el shader. Mide un fotograma antes del render y baja la complejidad si tarda más de 1,5 s con GPU (3 s por software).
 - **Gancho escrito (`texto_gancho`):** 6 palabras como máximo, con buen contraste, dentro de la zona segura. Debe **leerse completo en el frame 1**: nada de aparecer con fundido desde cero. Se queda hasta ~3 s y luego se transforma o sale con movimiento. Dice la idea del gancho hablado, no el nombre del tema, y **se entiende sola, sin sonido ni contexto**: "Tus dedos NO se arrugan por el agua", no "Tu cuerpo lo hace a propósito". **Va encima de la acción, no en lugar de ella (§2):** ocupa solo la franja superior (como mucho un 25 % del alto, bien dentro de la zona segura, porque la cuadrícula del perfil puede recortar arriba y abajo), con contorno oscuro grueso o una caja detrás para que se lea sobre la imagen, y el resto del cuadro es el sujeto moviéndose, grande y nítido: sin halos, niebla ni anillos encima que borren su forma. Nunca un cartel de título sobre fondo vacío. Ese plano es también la portada (§11).
 - **Subtítulos karaoke** desde `words.json`, dentro de un elemento con `id="subs"`: 1–2 líneas y pocas palabras a la vez, fuente redondeada y gruesa de 76–92 px, texto claro con contorno oscuro grueso para que se lea sobre cualquier imagen, y la palabra activa en un color de acento de la paleta, con un pequeño rebote. Cada grupo es una frase con sentido que se entiende sola: nunca cortes en "Todos creen que la"; agrupa por pausas y puntuación aunque el grupo dure más. **No tapan al sujeto:** compón cada escena con lo importante por encima de y≈1150.
 - **Un solo texto a la vez, además de los subtítulos.** Cuando salga el gancho, sin subtítulos encima que repitan lo mismo; los rótulos, cortos, siempre en el mismo lugar y con el mismo estilo. Si muestras un corte o el interior de algo, rotula cada parte con una palabra: si no, nadie sabe qué está viendo. Nada de textos pequeños ni en las zonas que tapa la interfaz: los avisos van en la descripción, no en pantalla. **En el cierre tampoco se duplica:** si el subtítulo ya dice el llamado a la acción, no lo repitas en otro texto a la vez; se queda uno de los dos.
@@ -156,18 +158,15 @@ Todo el video es un solo movimiento de cámara continuo: entra en un objeto y sa
 - Los tiempos de cada escena salen de `timeline.json`, incrustado en el HTML.
 - Mientras la construyes, captura frames de muestra con Playwright y **míralos** (Read) para comprobar la calidad; la revisión completa va en el QA previo (§10).
 
-**Render:**
-```python
-# render.py (lo escribes tú)  — 24 fps
-page.set_viewport_size({"width": W, "height": H})
-page.goto(f"file://{abs_path}/stage.html")
-for i in range(int(DURATION*24)):
-    page.evaluate("t => { window.renderAt(t); }", i / 24)
-    page.screenshot(path=f"frames/{i:05d}.png")
-# ffmpeg -framerate 24 -i frames/%05d.png -i mix.wav -c:v libx264 -pix_fmt yuv420p -crf 18 -c:a aac -b:a 192k -shortest final.mp4
+**Render:** usa el script de la app; no escribas el tuyo.
+
+```bash
+.venv/bin/python scripts/render_stage.py output/{{SLUG}}
 ```
 
-Ejecuta el render (y cualquier comando largo) **en primer plano**, con `timeout` de hasta 7200000 ms, y espera a que termine. No lo lances en segundo plano ni termines tu turno para "esperar": si terminas el turno, el proceso se cierra y el render se pierde. Haz que `render.py` salte los frames que ya existen, para poder retomarlo si se corta.
+Captura `stage.html` con `renderAt` a 24 fps en 3 procesos con la GPU, rehace por software los fotogramas que salgan con un cuadro negro y codifica `final.mp4` con `mix.wav` (H.264 `yuv420p`, AAC 48 kHz). Lee la duración de `timeline.json` y el formato de `script.json`. Con `--solo-frames` deja los frames sin codificar. Salta los frames que ya existen: si se corta, vuelve a ejecutarlo. Si al volver a renderizar cambiaste `stage.html`, borra antes `frames/`.
+
+Ejecútalo (y cualquier comando largo) **en primer plano**, con `timeout` de hasta 7200000 ms, y espera a que termine: los procesos que lanza son hijos de ese comando, no tareas en segundo plano. No lo lances en segundo plano ni termines tu turno para "esperar": si terminas el turno, el proceso se cierra y el render se pierde. Si avisa de frames que siguen con un bloque negro, míralos.
 
 ## 8. Música y efectos generados por código (costo cero)
 
@@ -196,7 +195,7 @@ Marca cada punto con `[x]` o `[ ]` y anota la medida real. Un punto sin cumplir 
 - [ ] Determinismo: captura tres instantes en orden, luego en orden inverso y uno más en una página recién cargada; los píxeles del mismo instante deben coincidir.
 - [ ] Anatomía: mira de cerca cada parte del cuerpo que salga: encaja con la siguiente, sin huecos, cortes ni líneas interrumpidas, y sus proporciones son creíbles. Ninguna figura atraviesa a otra ni se atraviesa a sí misma.
 - [ ] Cierre: los últimos 5 s no muestran el mismo texto dos veces (subtítulo y llamado a la acción).
-- [ ] Voz: cada WAV transcrita con `faster-whisper` sin prompt coincide con su línea del guion, palabra por palabra.
+- [ ] Voz: `scripts/revisar_voz.py` da «coincide» en cada escena, o las diferencias que quedan tras dos rondas están anotadas en `qa.md` con su segundo.
 - [ ] Captura `stage.html` con `renderAt` cada 3 s, más el primer y el último frame, y **míralos todos**: cada objeto se reconoce sin narración, los subtítulos no tapan al sujeto, calidad profesional y estilo de la serie (como en sus videos anteriores, si los hay), nada fuera de la zona segura, subtítulos legibles y sin cortar, sin frames vacíos, movimiento en el frame 1, y el primero y el último se parecen (loop).
 - [ ] Cada dato del guion está respaldado en `research.md`, con su fuente, y el tema está contado desde el nicho de la serie.
 - [ ] Contenido (§2): sin diagnósticos, tratamientos, dosis ni remedios; sin frases ni ejemplos copiados de otros videos.

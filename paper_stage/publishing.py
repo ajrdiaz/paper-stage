@@ -362,6 +362,14 @@ class Publisher:
     def state(self, slug: str) -> dict:
         return {"status": self.status.get(slug), "history": self.history(slug)}
 
+    def upcoming(self) -> list[dict]:
+        """Envíos a Buffer que todavía no salen en TikTok, del más próximo al más lejano. El estado es
+        el último que se le preguntó a Buffer: los futuros solo se consultan cuando llega su hora."""
+        rows = self.db.execute("SELECT slug, channel_name, due_at, status FROM publications WHERE mode != ? "
+                               "AND (status IS NULL OR status NOT IN ('sent', 'error', 'deleted')) "
+                               "ORDER BY due_at IS NULL, due_at", [MANUAL])
+        return [{"slug": s, "channel_name": c, "due_at": d, "status": st} for s, c, d, st in rows.fetchall()]
+
     def published(self) -> dict[str, str]:
         """Slug → "publicado" (salió en TikTok o se subió a mano), "enviando" (Buffer lo está
         subiendo ya: con «publicar ahora» tarda unos minutos) o "programado" (en Buffer, aún
@@ -459,6 +467,11 @@ class Publisher:
             channel = self.video_channel(slug)[1]
             if not channel:
                 raise PublishError("La serie de este video no tiene cuenta de TikTok. Elígela en su ficha (Series).")
+            # Nada sale con una corrección importante pendiente: se corrige o, si era una falsa alarma, se descarta.
+            pending = library.serious_suggestions(video.parent)
+            if pending:
+                raise PublishError(f"Este video tiene {pending} corrección(es) importante(s) sin resolver. Corrígelas o, si al "
+                                   "escucharlo o mirarlo están bien, descártalas en la pestaña Revisión.")
             cfg = {**cfg, "channel_id": channel["id"], "channel_name": channel["nombre"]}
             done = [h for h in self.history(slug) if h["channel_id"] == cfg["channel_id"] or h["mode"] == MANUAL]
             if done and not req.again:

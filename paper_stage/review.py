@@ -121,12 +121,21 @@ def _as_numbers(words: list[str]) -> list[tuple[str, int]]:
     return out
 
 
+def _sound(text: str) -> str:
+    """Cómo suena una grafía en el español de América: Whisper elige al azar entre las que suenan igual."""
+    x = text.replace(" ", "").replace("ch", "ç")  # la ch sí suena: se aparta mientras se tocan la h y la c
+    x = x.replace("h", "")  # h muda
+    x = re.sub(r"g(?=[ei])", "j", x)  # ge/gi = je/ji
+    x = re.sub(r"c(?=[ei])", "s", x).replace("z", "s")  # seseo: ce/ci/z = s
+    x = re.sub(r"qu(?=[ei])", "k", x).replace("c", "k")  # que/qui y ca/co/cu = k
+    x = x.replace("v", "b").replace("ll", "y").replace("ç", "ch")  # b/v y yeísmo
+    return re.sub(r"(.)\1+", r"\1", x)  # una vocal doble se une al hablar («ve estas» → «vestas»)
+
+
 def _same_sound(said: str, heard: str) -> bool:
-    """«ruge en» y «rujen» se oyen igual: Whisper junta vocales y duda entre ge y je."""
-    a, b = said.replace(" ", ""), heard.replace(" ", "")
-    # ge/je suenan igual, y una vocal doble se une al hablar.
-    a, b = (re.sub(r"(.)\1+", r"\1", x.replace("ge", "je").replace("gi", "ji")) for x in (a, b))
-    return bool(a) and a == b
+    """«se hereda» y «cereda», «vello» y «bello», «ruge en» y «rujen» se oyen igual."""
+    a = _sound(said)
+    return bool(a) and a == _sound(heard)
 
 
 def compare_speech(expected: str, heard: list[dict]) -> list[dict]:
@@ -525,7 +534,10 @@ async def review_video(out_dir: Path, serie: dict | None = None) -> dict:
         # El resumen se escribió antes de volver a mirar los avisos graves: si alguno no se confirmó, se dice.
         dropped = sum(1 for s in checked if s.get("verificacion", {}).get("veredicto") in ("menor", "falso"))
         if dropped and data["resumen"]:
-            data["resumen"] += f" ({dropped} aviso{'s' if dropped > 1 else ''} grave{'s' if dropped > 1 else ''} no se confirmó al volver a mirarlo{'s' if dropped > 1 else ''}.)"
+            data["resumen"] += (
+                f" ({dropped} avisos graves no se confirmaron al volver a mirarlos.)" if dropped > 1
+                else " (1 aviso grave no se confirmó al volver a mirarlo.)"
+            )
     except Exception as exc:  # noqa: BLE001 — sin Claude, siguen valiendo las medidas
         data["error_vision"] = f"No se pudo revisar la imagen: {exc}"[:300]
     return save(out_dir, {**data, "sugerencias": suggestions})

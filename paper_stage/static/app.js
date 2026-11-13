@@ -453,8 +453,13 @@ async function renderStudio(params) {
   view.innerHTML = `
     <div class="page-head"><div><h1>Estudio</h1>
       <p id="studio-intro">${studioIntro(chosen)}</p></div></div>
-    <div class="grid-studio">
-      ${studioForm(prefs, chars)}
+    <div class="tabbar" role="tablist" aria-label="Estudio">
+      <button type="button" role="tab" id="st-tab-nuevo" data-studio-tab="nuevo" aria-controls="st-nuevo">Nuevo video</button>
+      <button type="button" role="tab" id="st-tab-produccion" data-studio-tab="produccion" aria-controls="st-produccion">Producción
+        <span class="pill plain hidden" id="prod-count"></span></button>
+    </div>
+    <div id="st-nuevo" role="tabpanel" aria-labelledby="st-tab-nuevo" class="studio-form-panel">${studioForm(prefs, chars)}</div>
+    <div id="st-produccion" role="tabpanel" aria-labelledby="st-tab-produccion" class="grid-studio">
       <section class="card stack" aria-labelledby="queue-title">
         <div class="row"><h2 id="queue-title">En producción</h2><span class="spacer"></span>
           <span class="small muted">${CONFIG.concurrency} a la vez</span></div>
@@ -462,7 +467,21 @@ async function renderStudio(params) {
         <div class="row"><h2>Recientes</h2><span class="spacer"></span><a class="small" href="#/biblioteca">Ver biblioteca</a></div>
         <div id="recent-jobs" class="job-list"></div>
       </section>
+      <section class="card stack" aria-labelledby="schedule-title">
+        <div class="row"><h2 id="schedule-title">Programados en TikTok</h2></div>
+        <div id="scheduled" class="job-list"></div>
+      </section>
     </div>`;
+
+  // Dos pestañas: el formulario y lo que está en marcha. Se recuerda la última elegida.
+  const showTab = tab => {
+    $$("[data-studio-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.studioTab === tab));
+    $("#st-nuevo").classList.toggle("hidden", tab !== "nuevo");
+    $("#st-produccion").classList.toggle("hidden", tab !== "produccion");
+    savePrefs({ ...loadPrefs(), studioTab: tab });
+  };
+  showTab(params.get("tab") || saved.studioTab || "nuevo");
+  $$("[data-studio-tab]").forEach(b => b.addEventListener("click", () => showTab(b.dataset.studioTab)));
 
   const form = $("#new-video");
   const batch = $("#batch-toggle");
@@ -561,6 +580,7 @@ async function renderStudio(params) {
       if (created.length === 1) { location.hash = `#/trabajo/${created[0].id}`; return; }
       toast(`${created.length} videos en cola.`, "ok");
       $("#temas").value = "";
+      showTab("produccion");
       loadJobs();
     } catch (err) {
       $("#form-error").textContent = created.length ? `Se encolaron ${created.length}; luego: ${err.message}` : err.message;
@@ -580,9 +600,29 @@ async function renderStudio(params) {
     $("#active-jobs").innerHTML = active.length ? active.map(jobRow).join("")
       : `<div class="empty"><span class="big">Nada en producción</span>Los videos en producción aparecerán aquí.</div>`;
     $("#recent-jobs").innerHTML = recent.length ? recent.map(jobRow).join("") : `<p class="small muted">Todavía no hay trabajos terminados.</p>`;
+    $("#prod-count").textContent = active.length;
+    $("#prod-count").classList.toggle("hidden", !active.length);
+  }
+  // Lo programado cambia poco: basta con pedirlo al abrir y cada minuto.
+  async function loadSchedule() {
+    const items = (await api("/api/publishing/schedule")).filter(i => inAccount(i.serie));
+    $("#scheduled").innerHTML = items.length ? items.map(scheduledRow).join("")
+      : `<p class="small muted">Nada programado. Se programa desde la ficha de cada video.</p>`;
   }
   poll(loadJobs, 4000);
+  poll(loadSchedule, 60000);
   $("#tema")?.focus();
+}
+
+function scheduledRow(item) {
+  const when = item.due_at ? new Date(item.due_at).toLocaleString("es", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+    : "Enviándose ahora";
+  return `
+    <a class="job" href="#/video/${encodeURIComponent(item.slug)}">
+      <span class="title">${esc(item.titulo)}</span>
+      <span class="pills">${item.pendientes ? `<span class="pill plain failed" title="Escúchalo o míralo y corrígelo o descarta el aviso en la pestaña Revisión">${item.pendientes} por revisar</span>` : ""}</span>
+      <span class="meta"><strong>${esc(when)}</strong><span>${esc(item.channel_name || "TikTok")}</span></span>
+    </a>`;
 }
 
 /* ------------------------------------------------------------------ vista: trabajo */
@@ -1216,9 +1256,11 @@ async function renderSystem() {
     <div class="grid-studio"><section class="card stack" id="deps"><p class="muted">Revisando…</p></section>
     <section class="card stack" id="about"></section></div>`;
   view.insertAdjacentHTML("beforeend", `<section class="card stack" id="radar-setup" style="margin-top:24px"></section>
-    <section class="card stack" id="publishing" style="margin-top:24px"></section>`);
+    <section class="card stack" id="publishing" style="margin-top:24px"></section>
+    <section class="card stack" id="dramas-setup" style="margin-top:24px"></section>`);
   mountRadarSetup($("#radar-setup"));
   mountPublishingSetup($("#publishing"));
+  mountDramasSetup($("#dramas-setup"));
   const health = await api("/api/health");
   const group = (kind, title) => `<h2>${title}</h2><ul class="checklist">${health.items.filter(i => i.kind === kind).map(i => `
     <li class="${i.ok ? "ok" : i.optional ? "" : "bad"}"><span class="mark">${i.ok ? "✓" : i.optional ? "·" : "✗"}</span>
@@ -1386,6 +1428,7 @@ async function mountPublish(box, slug) {
   }
   const running = data.status?.state === "running";
   const sent = data.history.some(h => h.channel_id === channel.id) || manual;
+  const blocked = data.pendientes > 0 && !running;
   box.innerHTML = `
     <div class="row"><h3>Publicar en TikTok</h3>${tiktokPill(data.history.some(h => h.mode === "manual" || h.status === "sent") ? "publicado"
       : data.history.some(h => h.status === "sending") ? "enviando"
@@ -1395,7 +1438,9 @@ async function mountPublish(box, slug) {
     ${manual && !running ? `<p class="small muted">Ya está en TikTok. Si de verdad quieres enviarlo otra vez por Buffer,
       <button type="button" class="btn small" id="pub-show">muestra el formulario</button>.</p>` : ""}
     <div class="row">${running ? "" : markButton}</div>
-    <form id="pub-form" ${manual && !running ? "hidden" : ""}>
+    ${blocked ? `<p class="small" style="color:var(--warn)">No se puede publicar: ${data.pendientes === 1 ? "queda 1 corrección importante"
+      : `quedan ${data.pendientes} correcciones importantes`} en la pestaña Revisión. Corrígelas o, si al escucharlo o mirarlo están bien, descártalas.</p>` : ""}
+    <form id="pub-form" ${(manual && !running) || blocked ? "hidden" : ""}>
      <fieldset class="stack plain" ${running ? "disabled" : ""}>
       <div class="field"><label for="pub-text">Texto</label>
         <textarea id="pub-text" rows="4">${esc(data.default_text)}</textarea>
@@ -1780,6 +1825,41 @@ async function mountRadarSetup(box) {
     if (ev.target.id !== "apify-save") return;
     try { data = await api("/api/radar/config", { method: "PUT", body: { apify_token: $("#apify-key", box).value } }); draw(); toast("Guardado.", "ok"); }
     catch (err) { $("#apify-error", box).textContent = err.message; }
+  });
+}
+
+// Minidramas (en preparación): por ahora solo la clave de xAI y la comprobación de que da acceso a modelos de video.
+async function mountDramasSetup(box) {
+  let cfg = await api("/api/dramas");
+  const draw = () => {
+    const check = cfg.check;
+    box.innerHTML = `
+      <div class="row"><h2>Minidramas con Grok (en preparación)</h2><span class="spacer"></span>
+        ${check ? `<span class="pill ${check.ok ? "done" : "failed"}">${check.ok ? "Video disponible" : "Sin modelos de video"}</span>` : ""}</div>
+      <p class="small muted">Los clips de los minidramas se generarían con la API de xAI (Grok Imagine). La comprobación solo
+        lista los modelos de tu cuenta: no genera nada ni gasta cupo.</p>
+      ${cfg.demo ? `<p class="small">En modo demo no se usa la API de xAI.</p>` : `
+      <div class="field"><label for="xai-key">Clave de API de xAI</label>
+        <div class="row"><input type="password" id="xai-key" autocomplete="off"
+            placeholder="${cfg.xai_key ? `Guardada (${esc(cfg.xai_key_hint)})` : "Pega aquí tu clave"}" ${cfg.xai_key_env ? "disabled" : ""}>
+          <button type="button" class="btn small" id="xai-save" ${cfg.xai_key_env ? "disabled" : ""}>Guardar</button></div>
+        <span class="hint">${cfg.xai_key_env ? "Viene de la variable PAPER_STAGE_XAI_KEY." :
+          `Créala en <a href="https://console.x.ai" target="_blank" rel="noopener">console.x.ai</a> con la cuenta de tu plan de X. Se guarda solo en este equipo, en data/, y solo se envía a api.x.ai.`}</span></div>
+      <div class="row"><button type="button" class="btn" id="xai-check" ${cfg.xai_key ? "" : "disabled"}>Comprobar acceso</button>
+        <span class="small muted" id="xai-status">${check ? esc(check.message) : ""}</span></div>`}
+      <p id="xai-error" class="small" style="color:var(--warn)" role="alert"></p>`;
+  };
+  draw();
+  box.addEventListener("click", async ev => {
+    const id = ev.target.id;
+    if (id !== "xai-save" && id !== "xai-check") return;
+    $("#xai-error", box).textContent = "";
+    ev.target.disabled = true;
+    try {
+      if (id === "xai-save") { cfg = await api("/api/dramas", { method: "PUT", body: { xai_key: $("#xai-key", box).value } }); toast("Guardado.", "ok"); }
+      else { $("#xai-status", box).textContent = "Comprobando…"; cfg = await api("/api/dramas/check", { method: "POST" }); }
+      draw();
+    } catch (err) { draw(); $("#xai-error", box).textContent = err.message; }
   });
 }
 
